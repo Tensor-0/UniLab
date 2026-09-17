@@ -1,0 +1,34 @@
+# @package _global_
+# MuJoCo owner: inherits the shared 10-DoF DM10 flat Manager-Based contract
+# from base.yaml and only carries backend/algo identity.
+defaults:
+  - /task/dm10_joystick_flat/base
+  - _self_
+
+training:
+  task_name: DM10JoystickFlat
+  sim_backend: mujoco
+  # Playback framing (used by `eval --render-mode record`). Fixed camera aimed
+  # at the centre of the 15 s walk path so a long clip never runs off-screen.
+  play_env_num: 1
+  render_spacing: 2.0
+  cam_distance: 1.8
+  cam_azimuth: 145.0
+  cam_elevation: -5.0
+  cam_lookat: [0.0, 0.0, 0.40]
+  # Follow the robot so a long clip keeps it centred (fixed camera drifts off).
+  cam_tracking: true
+algo:
+  num_envs: 512
+  max_iterations: 3000
+  empirical_normalization: true
+  obs_groups:
+    actor:
+      - actor
+    critic:
+      - critic
+  policy:
+    init_noise_std: 0.5
+  algorithm:
+    learning_rate: 3.0e-4
+    entropy_coef: 1.0e-3

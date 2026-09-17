@@ -161,6 +161,13 @@ class UniformVelocityCommand(CommandTerm):
             )
             self.vel_command_b[forward_ids, 1:] = 0.0
 
+        # _update_metrics accumulates |cmd - v| / max_command_steps, i.e. the
+        # metric is an average over one command window. Clear the window when a
+        # new command is sampled; otherwise the value grows with episode length
+        # and is not comparable across runs.
+        self.metrics["error_vel_xy"][env_ids] = 0.0
+        self.metrics["error_vel_yaw"][env_ids] = 0.0
+
     def _update_command(self, env_ids: np.ndarray | None = None) -> None:
         del env_ids
         if self.cfg.heading_command:

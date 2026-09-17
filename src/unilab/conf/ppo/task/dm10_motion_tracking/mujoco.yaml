@@ -1,0 +1,162 @@
+# @package _global_
+# DM10 (Damiao 10-DoF lower body) motion-tracking task.
+#
+# Inherits the g1 motion-tracking task and overrides only robot identity,
+# tracked bodies, and the reference motion file. All reward/observation/
+# termination terms are inherited unchanged — the motion-tracking framework is
+# robot-agnostic (reward terms normalise by body/joint count).
+#
+# Reference motions are produced by dm10-motion-tracking
+# (scripts/rpo_pkl_to_dm10_npz.py), converting Roboparty RPO mocap clips to this
+# robot's 10 DoF via FK replay on scene_flat.xml.
+defaults:
+  - /task/g1_motion_tracking/mujoco
+  - _self_
+
+training:
+  task_name: DM10MotionTracking
+  sim_backend: mujoco
+  play_steps: 1000
+  play_env_num: 1
+  render_spacing: 2.0
+  # Matched to dm10_joystick_flat so A/B clips share framing.
+  cam_distance: 1.6
+  cam_azimuth: 145.0
+  cam_elevation: -4.0
+  cam_lookat: [0.0, 0.0, 0.40]
+  # Follow the robot so a long clip keeps it centred (fixed camera drifts off).
+  cam_tracking: true
+
+algo:
+  num_envs: 1024
+  max_iterations: 1500
+  save_interval: 500
+  obs_groups:
+    actor: [actor]
+
+play_profile:
+  enabled: false
+  env: null
+
+env:
+  scene:
+    model_file: src/unilab/assets/robots/dm10/scene_flat.xml
+    default_keyframe_name: home
+    entities:
+      robot:
+        root_body_name: base_link
+        joint_names: &dm10_joints
+          - leg_l1_joint
+          - leg_l2_joint
+          - leg_l3_joint
+          - leg_l4_joint
+          - leg_l5_joint
+          - leg_r1_joint
+          - leg_r2_joint
+          - leg_r3_joint
+          - leg_r4_joint
+          - leg_r5_joint
+        actuator_names:
+          - leg_l1_joint_motor
+          - leg_l2_joint_motor
+          - leg_l3_joint_motor
+          - leg_l4_joint_motor
+          - leg_l5_joint_motor
+          - leg_r1_joint_motor
+          - leg_r2_joint_motor
+          - leg_r3_joint_motor
+          - leg_r4_joint_motor
+          - leg_r5_joint_motor
+        # base_link MUST be first: MotionCommand uses body_names[0] as the
+        # root reference column when placing the robot on reset.
+        body_names: &tracked_bodies
+          - base_link
+          - loin_yaw_Link
+          - leg_l1_link
+          - leg_l2_link
+          - leg_l3_link
+          - leg_l4_link
+          - leg_l5_link
+          - leg_r1_link
+          - leg_r2_link
+          - leg_r3_link
+          - leg_r4_link
+          - leg_r5_link
+        geom_names: [floor]
+
+  commands:
+    motion:
+      _target_: unilab.tasks.motion_tracking.common.manager_terms.MotionCommandCfg
+      entity_name: robot
+      resampling_time_range: [1.0e9, 1.0e9]
+      params:
+        # 11 reference clips converted from Roboparty RPO mocap (2026-09-12).
+        # Each was speed-scaled individually so its peak knee angular velocity
+        # stays within the DM-J4340-2EC 24V limit (5.0 rad/s, 15% margin below
+        # the 5.86 rad/s no-load rating). See scripts/survey_motion_speed.py.
+        # Sampling is uniform across clips (no adaptive weighting yet).
+        motion_file:
+          - motions/dm10/move_r.npz              # 右移        scale 0.91
+          - motions/dm10/move_l.npz              # 左移        scale 1.08
+          - motions/dm10/move_back.npz           # 后退        scale 1.26
+          - motions/dm10/turn_r.npz              # 原地右转    scale 1.33
+          - motions/dm10/turn_l.npz              # 原地左转    scale 1.58
+          - motions/dm10/stand_to_walk_back.npz  # 站立→后退   scale 0.97
+          - motions/dm10/walk_left90.npz         # 走+左转90°  scale 1.66
+          - motions/dm10/walk_right90.npz        # 走+右转90°  scale 1.70
+          - motions/dm10/walk_turn_around.npz    # 走+转身180° scale 1.95
+          - motions/dm10/walk_left45.npz         # 走+左转45°  scale 1.57
+          - motions/dm10/walk_right45.npz        # 走+右转45°  scale 1.76
+        # dm10 has no torso_link; the root body doubles as the anchor.
+        anchor_body_name: base_link
+        body_names: *tracked_bodies
+        sampling_mode: start
+        sampling_start_ratio: 0.0
+        # NOTE: must stay false. With true, MotionCommand skips the wrap-around
+        # resample but still refreshes the reference buffer with the advanced
+        # (out-of-range) frame index, which raises IndexError at clip end.
+        # Episode end is handled by the `motion_clip_end` termination instead.
+        truncate_on_clip_end: false
+        pose_range:
+          x: [-0.05, 0.05]
+          y: [-0.05, 0.05]
+          z: [-0.01, 0.01]
+          roll: [-0.1, 0.1]
+          pitch: [-0.1, 0.1]
+          yaw: [-0.2, 0.2]
+        velocity_range:
+          x: [-0.5, 0.5]
+          y: [-0.5, 0.5]
+          z: [-0.2, 0.2]
+          roll: [-0.52, 0.52]
+          pitch: [-0.52, 0.52]
+          yaw: [-0.78, 0.78]
+        joint_position_range: [-0.1, 0.1]
+        joint_default_position_range: [0.0, 0.0]
+
+  terminations:
+    time_out:
+      func: unilab.envs.mdp.time_out
+      time_out: true
+    anchor_pos:
+      func: unilab.tasks.motion_tracking.common.manager_terms.bad_anchor_pos_z_only
+      params: {command_name: motion, threshold: 0.25}
+    anchor_ori:
+      func: unilab.tasks.motion_tracking.common.manager_terms.bad_anchor_ori
+      params:
+        command_name: motion
+        threshold: 0.8
+        asset_cfg:
+          _target_: unilab.managers.SceneEntityCfg
+          name: robot
+    # dm10 has no arms: only the two foot links are tracked end-effectors.
+    ee_body_pos:
+      func: unilab.tasks.motion_tracking.common.manager_terms.bad_motion_body_pos_z_only
+      params:
+        command_name: motion
+        threshold: 0.25
+        body_names:
+          - leg_l5_link
+          - leg_r5_link
+  policy_observation_group: actor
+  critic_observation_group: critic

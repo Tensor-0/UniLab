@@ -1,0 +1,48 @@
+# @package _global_
+# DM10 motion tracking on MuJoCo -- FlashSAC owner.
+#
+# Inherits the DM10 off-policy tracking contract and carries the FlashSAC algo
+# identity. Hyperparameters follow the tuned off-policy tracking line
+# (conf/sac/task/g1_motion_tracking + conf/flashsac/task/g1_walk_flat), scaled to
+# a 10-DoF lower-body robot rather than a 29-DoF humanoid.
+defaults:
+  - /task/dm10_motion_tracking/base
+  - _self_
+
+training:
+  task_name: DM10MotionTrackingFlashSAC
+  sim_backend: mujoco
+  play_steps: 1000
+  play_env_num: 1
+  render_spacing: 2.0
+  cam_distance: 1.6
+  cam_azimuth: 145.0
+  cam_elevation: -4.0
+  cam_lookat: [0.0, 0.0, 0.40]
+  cam_tracking: true
+
+algo:
+  num_envs: 2048
+  max_iterations: 2000
+  save_interval: 500
+  gamma: 0.99
+  tau: 0.05
+  num_atoms: 501
+  updates_per_step: 4
+  policy_frequency: 2
+  batch_size: 2048
+  learning_starts: 98
+  algo_params:
+    normalize_reward: true
+    normalized_g_max: 5.0
+    # FlashSAC's temp tuning, taken from the walk_flat owner.
+    temp_initial_value: 0.01
+    temp_target_sigma: 0.15
+    learning_rate_init: 3.0e-4
+    learning_rate_peak: 3.0e-4
+    learning_rate_end: 1.5e-4
+    learning_rate_decay_steps: 500000
+    n_step: 1
+    use_compile: false
+    use_cuda_graph_critic: false
+    use_cuda_graph_actor: false

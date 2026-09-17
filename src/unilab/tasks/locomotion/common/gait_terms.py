@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 import numpy as np
 
 from unilab.dtype_config import get_global_dtype
-from unilab.managers.manager_base import ManagerTermBaseCfg
+from unilab.managers.manager_base import ManagerTermBase, ManagerTermBaseCfg
 from unilab.managers.scene_entity_config import SceneEntityCfg
 
 from .manager_terms import SensorTermBase, _command, _real, _state
@@ -208,6 +208,82 @@ class feet_air_time(_FootContactTerm):
         return np.asarray(reward, dtype=get_global_dtype())
 
 
+class feet_contact_number(_FootContactTerm):
+    """Reward each foot whose contact state matches the expected gait phase.
+
+    Ports Damiao humanoid-gym's ``_reward_feet_contact_number``. A per-env phase
+    counter advances with ``step_dt`` over ``cycle_time``; its sine splits the
+    cycle into alternating single-support halves, with a double-support band
+    around the zero crossings where either foot may be planted. A foot scores
+    ``contact_score`` when its measured contact matches the target and
+    ``mismatch_score`` when it does not — the negative default is what makes an
+    arbitrary lifting pattern (hopping, stutter-stepping) a net cost instead of
+    a free choice. This is the constraint our earlier single-direction rewards
+    (slip penalty, air-time bonus) lacked.
+    """
+
+    _allowed_params: ClassVar[frozenset[str]] = _FootContactTerm._allowed_params | {
+        "cycle_time",
+        "contact_score",
+        "mismatch_score",
+        "double_support_band",
+        "command_name",
+        "command_threshold",
+    }
+
+    def __init__(self, cfg: ManagerTermBaseCfg, env: ManagerBasedRlEnv):
+        super().__init__(cfg, env)
+        if self.num_feet != 2:
+            raise ValueError(
+                f"{self.name} expects exactly 2 feet (left, right), received {self.num_feet}"
+            )
+        self._cycle_time = _real(
+            self.name, "cycle_time", cfg.params.get("cycle_time", 0.64),
+            minimum=0.0, strict_minimum=True,
+        )
+        self._contact_score = _real(
+            self.name, "contact_score", cfg.params.get("contact_score", 1.0)
+        )
+        self._mismatch_score = _real(
+            self.name, "mismatch_score", cfg.params.get("mismatch_score", -0.3)
+        )
+        self._band = _real(
+            self.name, "double_support_band", cfg.params.get("double_support_band", 0.1),
+            minimum=0.0,
+        )
+        self._command_name = _command_name_param(
+            self.name, cfg.params.get("command_name"), required=False
+        )
+        self._command_threshold = _real(
+            self.name, "command_threshold", cfg.params.get("command_threshold", 0.01),
+            minimum=0.0,
+        )
+        self._phase_time = np.zeros(env.num_envs, dtype=get_global_dtype())
+
+    def reset(self, env_ids: np.ndarray | slice | None = None) -> None:
+        self._phase_time[env_ids if env_ids is not None else slice(None)] = 0.0
+
+    def __call__(self, env: ManagerBasedRlEnv, **params: Any) -> np.ndarray:
+        del params
+        step_dt = _real(self.name, "step_dt", env.step_dt, minimum=0.0, strict_minimum=True)
+        self._phase_time += step_dt
+        phase = self._phase_time / self._cycle_time
+        sin_pos = np.sin(2.0 * np.pi * phase)
+        # Target stance per foot: left on the positive half, right on the negative.
+        target = np.stack([sin_pos >= 0.0, sin_pos < 0.0], axis=1)
+        # Around the zero crossings both feet may be planted (double support).
+        target[np.abs(sin_pos) < self._band] = True
+        contact = self._contact(env)
+        reward = np.where(
+            contact == target, self._contact_score, self._mismatch_score
+        )
+        cost = np.mean(reward, axis=1)
+        gate = _command_gate(env, self.name, self._command_name, self._command_threshold)
+        if gate is not None:
+            cost = cost * gate
+        return np.asarray(cost, dtype=get_global_dtype())
+
+
 class feet_swing_height(_FootContactTerm):
     """Penalize peak-swing-height deviation from the target, evaluated at landing.
 
@@ -317,6 +393,52 @@ class feet_slip(_FootContactTerm):
         return np.asarray(cost, dtype=get_global_dtype())
 
 
+def feet_slip_height_weighted(
+    env: ManagerBasedRlEnv,
+    ground_height: float = 0.02,
+    lift_height: float = 0.08,
+    command_name: str | None = None,
+    command_threshold: float = 0.01,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> np.ndarray:
+    """Penalize foot sliding weighted by how low the foot is, not by contact.
+
+    ``feet_slip`` gates the penalty on the binary contact sensor, so a policy can
+    shrink the penalty by leaving the contact state — which is what produced a
+    5 Hz shuffle with heavy contact-phase sliding. Here the weight is a
+    continuous function of the foot body's height above the ground:
+
+    - z <= ground_height          -> weight 1.0
+    - z >= lift_height            -> weight 0.0
+    - in between                  -> linear ramp
+
+    A foot that is genuinely off the ground pays nothing; a foot that hugs the
+    ground while moving pays the full squared xy speed whether or not the
+    contact sensor fires. On flat terrain the world-frame foot z is exact.
+    """
+    ground = _real("feet_slip_height_weighted", "ground_height", ground_height, minimum=0.0)
+    lift = _real("feet_slip_height_weighted", "lift_height", lift_height, minimum=0.0)
+    if lift <= ground:
+        raise ValueError(
+            "feet_slip_height_weighted requires lift_height > ground_height, "
+            f"received lift_height={lift}, ground_height={ground}"
+        )
+    name = _command_name_param("feet_slip_height_weighted", command_name, required=False)
+    threshold = _real(
+        "feet_slip_height_weighted", "command_threshold", command_threshold, minimum=0.0
+    )
+    positions, velocities = _feet_pos_vel(
+        "feet_slip_height_weighted", env, asset_cfg, len(asset_cfg.body_ids)
+    )
+    vel_xy_norm_sq = np.sum(np.square(velocities[:, :, :2]), axis=2)
+    weight = np.clip((lift - positions[:, :, 2]) / (lift - ground), 0.0, 1.0)
+    cost = np.sum(vel_xy_norm_sq * weight, axis=1)
+    gate = _command_gate(env, "feet_slip_height_weighted", name, threshold)
+    if gate is not None:
+        cost = cost * gate
+    return np.asarray(cost, dtype=get_global_dtype())
+
+
 def feet_clearance(
     env: ManagerBasedRlEnv,
     target_height: float,
@@ -349,6 +471,127 @@ def feet_clearance(
     if gate is not None:
         cost = cost * gate
     return np.asarray(cost, dtype=get_global_dtype())
+
+
+class feet_clearance_peak(_FootContactTerm):
+    """Reward a swing foot whose accumulated apex matches ``target_height``.
+
+    Ports Damiao humanoid-gym's ``_reward_feet_clearance`` (the formulation
+    their walking config uses; the ``feet_clearance`` cost above is the mjlab
+    variant and has the opposite sign convention). Per foot it integrates the
+    height change since the last contact, resets on contact, and pays out when
+    the accumulated height is within ``tolerance`` of the target. Returns the
+    number of feet satisfying that, so the policy is driven to lift the foot to
+    a specific height rather than merely to avoid scraping.
+    """
+
+    _allowed_params: ClassVar[frozenset[str]] = _FootContactTerm._allowed_params | {"asset_cfg",
+                                                                                    "target_height",
+                                                                                    "tolerance"}
+
+    def __init__(self, cfg: ManagerTermBaseCfg, env: ManagerBasedRlEnv):
+        super().__init__(cfg, env)
+        self._target = _real(
+            self.name, "target_height", cfg.params.get("target_height", 0.06), minimum=0.0
+        )
+        self._tolerance = _real(
+            self.name,
+            "tolerance",
+            cfg.params.get("tolerance", 0.01),
+            minimum=0.0,
+            strict_minimum=True,
+        )
+        asset_cfg = cfg.params.get("asset_cfg", _DEFAULT_ASSET_CFG)
+        if not isinstance(asset_cfg, SceneEntityCfg):
+            raise TypeError(f"{self.name} asset_cfg must be a SceneEntityCfg")
+        self._asset_cfg = asset_cfg
+        asset = cast("Entity", env.scene[asset_cfg.name])
+        if _num_selected_bodies(asset, asset_cfg) != self.num_feet:
+            raise ValueError(
+                f"{self.name} asset_cfg selects {_num_selected_bodies(asset, asset_cfg)} "
+                f"bodies but sensor_groups declares {self.num_feet} feet"
+            )
+        self._air_height = np.zeros((env.num_envs, self.num_feet), dtype=get_global_dtype())
+        self._last_z: np.ndarray | None = None
+
+    def reset(self, env_ids: np.ndarray | slice | None = None) -> None:
+        ids = env_ids if env_ids is not None else slice(None)
+        self._air_height[ids] = 0.0
+        if self._last_z is not None:
+            self._last_z[ids] = 0.0
+
+    def __call__(self, env: ManagerBasedRlEnv, **params: Any) -> np.ndarray:
+        del params
+        asset = cast("Entity", env.scene[self._asset_cfg.name])
+        foot_z = _state(
+            self.name,
+            "foot body position",
+            asset.data.body_link_pos_w[:, self._asset_cfg.body_ids, 2],
+            (env.num_envs, self.num_feet),
+        )
+        if self._last_z is None:
+            self._last_z = foot_z.copy()
+        contact = self._contact(env)
+        # Accumulate height gained since the foot last touched down.
+        self._air_height = np.where(contact, 0.0, self._air_height + (foot_z - self._last_z))
+        self._last_z = foot_z.copy()
+        at_target = np.abs(self._air_height - self._target) < self._tolerance
+        return np.asarray(np.sum(at_target, axis=1), dtype=get_global_dtype())
+
+
+class feet_distance(ManagerTermBase):
+    """Reward holding the horizontal foot separation inside a target band.
+
+    Ports Damiao humanoid-gym's ``_reward_feet_distance``: pay when the feet are
+    no closer than ``min_dist`` and no further than ``max_dist``. A positive
+    term here is the correct sign — the earlier ``penalty_close_feet_xy``
+    penalised proximity instead and measurably collapsed the stride.
+    """
+
+    _allowed_params: ClassVar[frozenset[str]] = frozenset(
+        {"min_dist", "max_dist", "asset_cfg", "sharpness"}
+    )
+
+    def __init__(self, cfg: ManagerTermBaseCfg, env: ManagerBasedRlEnv):
+        super().__init__(env)
+        unexpected = set(cfg.params) - self._allowed_params
+        if unexpected:
+            raise TypeError(f"{self.name} received unsupported parameters: {sorted(unexpected)}")
+        self._min_dist = _real(self.name, "min_dist", cfg.params.get("min_dist", 0.2), minimum=0.0)
+        self._max_dist = _real(self.name, "max_dist", cfg.params.get("max_dist", 0.5), minimum=0.0)
+        if self._max_dist <= self._min_dist:
+            raise ValueError(
+                f"{self.name} max_dist must exceed min_dist, got "
+                f"{self._max_dist} <= {self._min_dist}"
+            )
+        self._sharpness = _real(
+            self.name, "sharpness", cfg.params.get("sharpness", 100.0), minimum=0.0, strict_minimum=True
+        )
+        asset_cfg = cfg.params.get("asset_cfg", _DEFAULT_ASSET_CFG)
+        if not isinstance(asset_cfg, SceneEntityCfg):
+            raise TypeError(f"{self.name} asset_cfg must be a SceneEntityCfg")
+        self._asset_cfg = asset_cfg
+        asset = cast("Entity", env.scene[asset_cfg.name])
+        num_bodies = _num_selected_bodies(asset, asset_cfg)
+        if num_bodies != 2:
+            raise ValueError(
+                f"{self.name} asset_cfg must select exactly two bodies, got {num_bodies}"
+            )
+
+    def __call__(self, env: ManagerBasedRlEnv, **params: Any) -> np.ndarray:
+        del params
+        asset = cast("Entity", env.scene[self._asset_cfg.name])
+        positions = np.asarray(
+            asset.data.body_link_pos_w[:, self._asset_cfg.body_ids, :2], dtype=get_global_dtype()
+        )
+        dist = np.linalg.norm(positions[:, 0, :] - positions[:, 1, :], axis=1)
+        too_close = np.clip(dist - self._min_dist, -0.5, 0.0)
+        too_far = np.clip(dist - self._max_dist, 0.0, 0.5)
+        reward = (
+            np.exp(-np.abs(too_close) * self._sharpness)
+            + np.exp(-np.abs(too_far) * self._sharpness)
+        ) / 2.0
+        return np.asarray(reward, dtype=get_global_dtype())
 
 
 class self_collision_cost(_FootContactTerm):
@@ -490,7 +733,9 @@ __all__ = [
     "angular_momentum_penalty",
     "feet_air_time",
     "feet_clearance",
+    "feet_contact_number",
     "feet_slip",
+    "feet_slip_height_weighted",
     "feet_swing_height",
     "foot_air_time",
     "foot_contact",

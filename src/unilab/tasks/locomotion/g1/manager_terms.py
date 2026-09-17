@@ -362,6 +362,128 @@ class feet_phase_contrast(_GaitRewardTerm):
         return np.asarray(reward * self._gate(env), dtype=get_global_dtype())
 
 
+def _sinusoidal_joint_targets(
+    phase: np.ndarray, scale_1: float, scale_2: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-leg (hip, knee, ankle) offsets from a sine-driven reference gait.
+
+    Ports Damiao humanoid-gym's ``compute_ref_state``: each leg swings only on
+    its own half of the cycle and holds its neutral pose through the stance
+    half, which is what turns a sine into an actual stride rather than a
+    symmetric shuffle. ``phase`` is (num_envs, 2) in radians, left then right,
+    with the right leg offset by pi upstream.
+    """
+    sin_l = np.sin(phase[:, 0])
+    sin_r = np.sin(phase[:, 1])
+    # Swing only on the negative half (left) / positive half (right); the other
+    # half holds the neutral pose.
+    swing_l = np.where(sin_l > -0.1, 0.0, sin_l)
+    swing_r = np.where(sin_r < 0.1, 0.0, sin_r)
+    # hip, knee, ankle — knee amplitude is doubled (scale_2), matching upstream.
+    left = np.column_stack([swing_l * scale_1, -swing_l * scale_2, swing_l * scale_1])
+    right = np.column_stack([-swing_r * scale_1, swing_r * scale_2, -swing_r * scale_1])
+    return left, right
+
+
+class reference_joint_pos(ManagerTermBase):
+    """Track a sine-driven reference joint trajectory for the hip/knee/ankle.
+
+    Damiao's walking config pays ``joint_pos = 1.3`` for following a reference
+    pose sequence; nothing in our previous reward table supplied such a target,
+    so the policy had no incentive to actually swing a leg (it settled on a
+    knee-only shuffle, and a later "swing velocity" term was gamed into
+    same-phase twitching — both measured).
+
+    This supplies the target directly: reward ``exp(-||q - q_ref||)`` with a
+    linear tail, exactly the upstream shape. The reference is built from the
+    same gait-phase clock the other gait terms use, so the two stay in sync.
+    """
+
+    _allowed_params: ClassVar[frozenset[str]] = frozenset(
+        {
+            "frequency",
+            "init_mode",
+            "target_joint_pos_scale",
+            "asset_cfg",
+            "command_name",
+            "command_threshold",
+            "linear_tail",
+        }
+    )
+
+    def __init__(self, cfg: ManagerTermBaseCfg, env: _G1Env):
+        super().__init__(env)
+        unexpected = set(cfg.params) - self._allowed_params
+        if unexpected:
+            raise TypeError(f"{self.name} received unsupported parameters: {sorted(unexpected)}")
+        frequency = _real(self.name, "frequency", cfg.params.get("frequency", 1.5), minimum=0.0)
+        init_mode = cfg.params.get("init_mode", "offset_phase")
+        if init_mode not in _GAIT_INIT_MODES:
+            raise ValueError(f"{self.name} init_mode must be one of {_GAIT_INIT_MODES}")
+        self._scale_1 = _real(
+            self.name,
+            "target_joint_pos_scale",
+            cfg.params.get("target_joint_pos_scale", 0.3),
+            minimum=0.0,
+        )
+        self._scale_2 = 2.0 * self._scale_1
+        self._tail = _real(
+            self.name, "linear_tail", cfg.params.get("linear_tail", 0.2), minimum=0.0
+        )
+        asset_cfg = cast(SceneEntityCfg, cfg.params.get("asset_cfg", _DEFAULT_ASSET_CFG))
+        self._asset_cfg = asset_cfg
+        ids = asset_cfg.joint_ids
+        if np.size(ids) != 6:
+            raise ValueError(
+                f"{self.name} asset_cfg must select six joints (hip/knee/ankle per leg), "
+                f"got {np.size(ids)}"
+            )
+        self._ids = ids
+        command_name = cfg.params.get("command_name", "twist")
+        if not isinstance(command_name, str) or not command_name:
+            raise ValueError(f"{self.name} command_name must be a non-empty string")
+        self._command_name = command_name
+        self._command_threshold = _real(
+            self.name, "command_threshold", cfg.params.get("command_threshold", 0.01), minimum=0.0
+        )
+        self._context = _gait_context(env, self.name, frequency, init_mode)
+
+    def reset(self, env_ids: np.ndarray | slice | None = None) -> None:
+        if env_ids is None:
+            ids = np.arange(self.num_envs, dtype=np.intp)
+        elif isinstance(env_ids, slice):
+            ids = np.arange(self.num_envs, dtype=np.intp)[env_ids]
+        else:
+            ids = np.asarray(env_ids, dtype=np.intp).reshape(-1)
+        _resample_gait(cast("_G1Env", self._env), self._context, ids)
+
+    def __call__(self, env: _G1Env, **params: Any) -> np.ndarray:
+        del params
+        phase = _advance_gait(env, self._context)
+        left, right = _sinusoidal_joint_targets(phase, self._scale_1, self._scale_2)
+        asset = _asset(env, self._asset_cfg)
+        position = _state(
+            self.name,
+            "joint position",
+            asset.data.joint_pos[:, self._ids],
+            (env.num_envs, 6),
+        )
+        default = _state(
+            self.name,
+            "default joint position",
+            asset.data.default_joint_pos[:, self._ids],
+            (env.num_envs, 6),
+        )
+        # Upstream drives the target from the default pose plus the sine offsets.
+        target = default + np.concatenate([left, right], axis=1)
+        diff = position - target
+        error = np.linalg.norm(diff, axis=1)
+        reward = np.exp(-error) - self._tail * np.clip(error, 0.0, 0.5)
+        command = _command(env, self.name, self._command_name)
+        gate = np.linalg.norm(command, axis=1) > self._command_threshold
+        return np.asarray(reward * gate, dtype=get_global_dtype())
+
+
 class _FootContactTerm(_GaitRewardTerm):
     """Adds the aggregated per-foot contact binding shared by contact gait terms."""
 
@@ -584,6 +706,66 @@ class penalty_close_feet_xy(_SensorTerm):
             ),
             dtype=get_global_dtype(),
         )
+
+
+class hip_swing_velocity(ManagerTermBase):
+    """Reward hip joints *moving*, not merely being displaced.
+
+    The first attempt at this term rewarded ``|pos - default|`` and failed
+    measurably: the policy parked both hips at a fixed offset (~+0.92 / +0.59
+    rad, hip_l pinned against its +1.08 limit) and collected full reward without
+    ever swinging — verified by reading joint angles out of a policy rollout.
+
+    Rewarding the per-step angle *change* instead gives nothing for a held pose,
+    so the only way to earn this term is a real reciprocating stride. Magnitude
+    is normalised by ``joint_vel`` and capped at 1 to avoid a velocity-chasing
+    policy; the cap is per-joint and then averaged.
+
+    Select the hip joints via ``asset_cfg.joint_names``.
+    """
+
+    _allowed_params: ClassVar[frozenset[str]] = frozenset(
+        {"joint_vel", "command_name", "command_threshold"}
+    )
+
+    def __init__(self, cfg: ManagerTermBaseCfg, env: ManagerBasedRlEnv):
+        super().__init__(env)
+        unexpected = set(cfg.params) - self._allowed_params - {"asset_cfg"}
+        if unexpected:
+            raise TypeError(f"{self.name} received unsupported parameters: {sorted(unexpected)}")
+        self._joint_vel = _real(
+            self.name, "joint_vel", cfg.params.get("joint_vel", 1.0), minimum=0.0, strict_minimum=True
+        )
+        command_name = cfg.params.get("command_name")
+        if command_name is not None and (not isinstance(command_name, str) or not command_name):
+            raise ValueError(f"{self.name} command_name must be a non-empty string or None")
+        self._command_name = command_name
+        self._command_threshold = _real(
+            self.name, "command_threshold", cfg.params.get("command_threshold", 0.0), minimum=0.0
+        )
+        self._asset_cfg = cast(
+            SceneEntityCfg, cfg.params.get("asset_cfg", _DEFAULT_ASSET_CFG)
+        )
+        self._ids = self._asset_cfg.joint_ids
+
+    def _moving(self, env: ManagerBasedRlEnv) -> np.ndarray:
+        if self._command_name is None:
+            return np.ones(env.num_envs, dtype=np.bool_)
+        command = _command(env, self.name, self._command_name)
+        return np.linalg.norm(command, axis=1) > self._command_threshold
+
+    def __call__(self, env: ManagerBasedRlEnv, **params: Any) -> np.ndarray:
+        del params
+        asset = _asset(env, self._asset_cfg)
+        velocity = _state(
+            self.name,
+            "joint velocity",
+            asset.data.joint_vel[:, self._ids],
+            (env.num_envs, np.size(self._ids)),
+        )
+        normalised = np.abs(velocity) / self._joint_vel
+        reward = np.mean(np.minimum(normalised, 1.0), axis=1)
+        return np.asarray(reward * self._moving(env), dtype=get_global_dtype())
 
 
 # ---------------------------------------------------------------------------
