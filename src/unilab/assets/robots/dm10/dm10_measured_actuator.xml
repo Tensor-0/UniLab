@@ -1,0 +1,263 @@
+<mujoco model="dm10_actuator">
+  <!-- Damiao bipedal lower-body, 10 DoF (leg_l1-5 + leg_r1-5), derived from the
+       official miao_arm MJCF (bipedal-robot repo). Arms and waist yaw removed
+       per project decision; waist link kept as a fixed (jointless) connection so
+       leg mounting frames and inertials stay identical to the official model.
+
+       VARIANT ``dm10_actuator``: body/inertia geometry is bit-identical to
+       ``dm10.xml``; ONLY the actuator model differs. ``dm10.xml`` keeps the
+       constant-torque <position> servo (forcerange ±28 N·m, torque independent of
+       speed); this file uses the real DM-J4340-2EC torque-speed curve. The two
+       must both exist so A/B measurements keep a baseline arm — see
+       ~/UniLab/HANDOFF-dm10-actuator.md. -->
+  <!-- DYNAMIC MODEL SOURCE: this file is NOT copied by dm10-motion-tracking's
+       scripts/install_to_unilab.sh (which only ships config/*.py|yaml + motions),
+       so UniLab is its only copy. Keep the baseline ``dm10.xml`` untouched. -->
+  <option timestep="0.001" iterations="50" solver="PGS" gravity="0 0 -9.81"/>
+  <compiler angle="radian" autolimits="true" meshdir="assets"/>
+
+  <default>
+    <joint limited="true" armature="0.05" damping="0.01"/>
+    <!-- Deliberately NO actuator default block. A `<position forcerange=...>` here
+         would be SILENTLY INHERITED by <dcmotor>, capping it at that constant
+         instead of the real torque-speed curve — MuJoCo accepts forcerange on
+         <dcmotor> only through defaults (inline it rejects as "unrecognized
+         attribute"). Verified 2026-09-17: with the default present,
+         forcelimited=True / forcerange=[-28 28]; without it, forcelimited=False. -->
+  </default>
+
+  <asset>
+    <material name="dark" rgba="0.898039 0.917647 0.929412 1.0"/>
+    <material name="orange" rgba="0.854902 0.67451 0.541176 1.0"/>
+    <material name="white" rgba="1 1 1 1"/>
+    <mesh name="base_link" file="base_link.STL"/>
+    <mesh name="loin_yaw_Link" file="loin_yaw_Link.STL"/>
+    <mesh name="leg_l1_link" file="leg_l1_link.STL"/>
+    <mesh name="leg_l2_link" file="leg_l2_link.STL"/>
+    <mesh name="leg_l3_link" file="leg_l3_link.STL"/>
+    <mesh name="leg_l4_link" file="leg_l4_link.STL"/>
+    <mesh name="leg_l5_link" file="leg_l5_link.STL"/>
+    <mesh name="leg_r1_link" file="leg_r1_link.STL"/>
+    <mesh name="leg_r2_link" file="leg_r2_link.STL"/>
+    <mesh name="leg_r3_link" file="leg_r3_link.STL"/>
+    <mesh name="leg_r4_link" file="leg_r4_link.STL"/>
+    <mesh name="leg_r5_link" file="leg_r5_link.STL"/>
+  </asset>
+
+  <worldbody>
+    <body name="base_link" pos="0.0 0.0 0.7" quat="1.0 0.0 0.0 0.0">
+      <inertial mass="1" pos="0.00377207 0.00223131 -0.115526"
+        quat="0.999479912032634 -0.0305585973104418 0.0102985990935879 -0.0001281809887183"
+        diaginertia="0.0105605 0.00674314 0.00591478"/>
+      <joint name="dummy_to_base_link" type="free" pos="0.0 0.0 0.0" axis="0.0 0.0 1.0"
+        range="0.0 0.0" damping="0.0" stiffness="0.0" armature="0.0" frictionloss="0.0"/>
+      <site name="imu_in_torso" size="0.01" pos="0.0 0.0 -0.05"/>
+      <geom type="mesh" mesh="base_link" contype="0" conaffinity="0" pos="0.0 0.0 0.0"
+        quat="1.0 0.0 0.0 0.0" material="dark"/>
+      <geom name="base_collision" rgba="0 0.7 0.3 0.1" type="box" pos="-0.01 0.0 -0.11"
+        quat="1.0 0.0 0.0 0.0" size="0.05 0.06 0.12" contype="1" conaffinity="1"
+        friction="1.0 0.005 0.0001"/>
+
+      <body name="loin_yaw_Link" pos="0.0042148 0.0028621 -0.25475" quat="1.0 0.0 0.0 0.0">
+        <inertial mass="0.9799" pos="-1.9e-05 0.0 -0.041281"
+          quat="0.7056683488993905 0.7056683488993905 -0.045079722288498 0.045079722288498"
+          diaginertia="0.00185959 0.00178788 0.00108232"/>
+        <geom type="mesh" mesh="loin_yaw_Link" contype="0" conaffinity="0" pos="0.0 0.0 0.0"
+          quat="1.0 0.0 0.0 0.0" material="orange"/>
+        <geom name="waist_collision" rgba="0 0.7 0.3 0.1" type="box" pos="0.0 0.0 -0.045"
+          quat="1.0 0.0 0.0 0.0" size="0.04 0.05 0.035" contype="1" conaffinity="1"
+          friction="1.0 0.005 0.0001"/>
+
+        <body name="leg_l1_link" pos="0.0 0.05355 -0.0515" quat="1.0 0.0 0.0 0.0">
+          <inertial mass="0.4635" pos="0.003422 0.041688 -7.6e-05"
+            quat="0.477051207758947 0.1615360703500239 -0.7244793155155197 0.4705932049464442"
+            diaginertia="0.000276531 0.000274854 0.000271285"/>
+          <joint name="leg_l1_joint" type="hinge" pos="0.0 0.0 0.0" axis="0.0 1.0 0.0"
+            range="-1.05 1.05" damping="0.0" stiffness="0.0" armature="0.05" frictionloss="0.075"/>
+          <geom type="mesh" mesh="leg_l1_link" contype="0" conaffinity="0" pos="0.0 0.0 0.0"
+            quat="1.0 0.0 0.0 0.0" material="orange"/>
+          <geom name="leg_l1_collision" rgba="0 0.7 0.3 0.1" type="box" pos="0.0 0.0 0.0"
+            quat="1.0 0.0 0.0 0.0" size="5e-05 5e-05 5e-05" contype="1" conaffinity="1"
+            friction="1.0 0.005 0.0001"/>
+
+          <body name="leg_l2_link" pos="0.03105 0.042 0.0" quat="1.0 0.0 0.0 0.0">
+            <inertial mass="0.0543" pos="-0.029211 1.6e-05 -0.031591"
+              quat="0.5978653600860446 0.3775672274035236 0.3775672274035236 0.5978653600860446"
+              diaginertia="9.65164e-05 6.60446e-05 5.82108e-05"/>
+            <joint name="leg_l2_joint" type="hinge" pos="0.0 0.0 0.0" axis="1.0 0.0 0.0"
+              range="-0.52 0.785" damping="0.0" stiffness="0.0" armature="0.05" frictionloss="0.075"/>
+            <geom type="mesh" mesh="leg_l2_link" contype="0" conaffinity="0" pos="0.0 0.0 0.0"
+              quat="1.0 0.0 0.0 0.0" material="white"/>
+            <geom name="leg_l2_collision" rgba="0 0.7 0.3 0.1" type="box" pos="0.0 0.0 0.0"
+              quat="1.0 0.0 0.0 0.0" size="5e-05 5e-05 5e-05" contype="1" conaffinity="1"
+              friction="1.0 0.005 0.0001"/>
+
+            <body name="leg_l3_link" pos="-0.03105 0.0 -0.07405" quat="1.0 0.0 0.0 0.0">
+              <inertial mass="0.905" pos="-8.2e-05 0.001688 -0.070672"
+                quat="0.998709467215822 0.0207181096923369 -0.0032466115188283 0.0462560216394716"
+                diaginertia="0.00233707 0.00232332 0.000531315"/>
+              <joint name="leg_l3_joint" type="hinge" pos="0.0 0.0 0.0" axis="0.0 0.0 1.0"
+                range="-0.52 0.785" damping="0.0" stiffness="0.0" armature="0.05" frictionloss="0.075"/>
+              <geom type="mesh" mesh="leg_l3_link" contype="0" conaffinity="0" pos="0.0 0.0 0.0"
+                quat="1.0 0.0 0.0 0.0" material="dark"/>
+              <geom name="leg_l3_collision" rgba="0 0.7 0.3 0.1" type="box" pos="0.0 0.0 0.0"
+                quat="1.0 0.0 0.0 0.0" size="5e-05 5e-05 5e-05" contype="1" conaffinity="1"
+                friction="1.0 0.005 0.0001"/>
+
+              <body name="leg_l4_link" pos="0.0 0.03105 -0.11705" quat="1.0 0.0 0.0 0.0">
+                <inertial mass="0.5819" pos="0.000193 -0.033837 -0.078429"
+                  quat="0.999871027280792 0.0064783001767559 5.1954201417534585e-05 -0.0146955004009566"
+                  diaginertia="0.00110562 0.000949315 0.000417767"/>
+                <joint name="leg_l4_joint" type="hinge" pos="0.0 0.0 0.0" axis="0.0 1.0 0.0"
+                  range="-0.3 2.3562" damping="0.0" stiffness="0.0" armature="0.05" frictionloss="0.075"/>
+                <geom type="mesh" mesh="leg_l4_link" contype="0" conaffinity="0" pos="0.0 0.0 0.0"
+                  quat="1.0 0.0 0.0 0.0" material="orange"/>
+                <geom name="leg_l4_collision" rgba="0 0.7 0.3 0.1" type="box" pos="0.0 -0.03 -0.1"
+                  quat="1.0 0.0 0.0 0.0" size="0.0205 0.035 0.075" contype="1" conaffinity="1"
+                  friction="1.0 0.005 0.0001"/>
+
+                <body name="leg_l5_link" pos="-1.6188e-05 -0.01955 -0.20287" quat="1.0 0.0 0.0 0.0">
+                  <inertial mass="0.0641" pos="0.00260998 -0.00912783 0.0166971"
+                    quat="0.3071679044288681 0.6259468052451321 0.6777817891173791 0.2333459273975761"
+                    diaginertia="0.00031591 0.000228233 0.000111589"/>
+                  <joint name="leg_l5_joint" type="hinge" pos="0.0 0.0 0.0" axis="0.0 1.0 0.0"
+                    range="-1.047 0.3" damping="0.0" stiffness="0.0" armature="0.05" frictionloss="0.075"/>
+                  <site name="left_foot" rgba="1 0 0 1" size="0.01" pos="0.027 -0.012 -0.012"/>
+                  <geom type="mesh" mesh="leg_l5_link" contype="0" conaffinity="0" pos="0.0 0.0 0.0"
+                    quat="1.0 0.0 0.0 0.0" material="orange"/>
+                  <geom name="leg_l5_foot_geom" rgba="0 0.7 0.3 0.1" type="box" pos="0.027 -0.012 -0.012"
+                    quat="1.0 0.0 0.0 0.0" size="0.0875 0.025 0.01" contype="1" conaffinity="1"
+                    friction="1.0 0.005 0.0001"/>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+
+        <body name="leg_r1_link" pos="0.0 -0.05355 -0.0515" quat="1.0 0.0 0.0 0.0">
+          <inertial mass="0.4635" pos="0.00342 -0.041705 -8.4e-05"
+            quat="0.1615360703500239 0.477051207758947 -0.4705932049464442 0.7244793155155197"
+            diaginertia="0.000276531 0.000274854 0.000271285"/>
+          <joint name="leg_r1_joint" type="hinge" pos="0.0 0.0 0.0" axis="0.0 1.0 0.0"
+            range="-1.05 1.05" damping="0.0" stiffness="0.0" armature="0.05" frictionloss="0.075"/>
+          <geom type="mesh" mesh="leg_r1_link" contype="0" conaffinity="0" pos="0.0 0.0 0.0"
+            quat="1.0 0.0 0.0 0.0" material="dark"/>
+          <geom name="leg_r1_collision" rgba="0 0.7 0.3 0.1" type="box" pos="0.0 0.0 0.0"
+            quat="1.0 0.0 0.0 0.0" size="5e-05 5e-05 5e-05" contype="1" conaffinity="1"
+            friction="1.0 0.005 0.0001"/>
+
+          <body name="leg_r2_link" pos="0.03105 -0.042 0.0" quat="1.0 0.0 0.0 0.0">
+            <inertial mass="0.0543" pos="-0.029211 1.6e-05 -0.031544"
+              quat="0.5978653600860446 0.3775672274035236 0.3775672274035236 0.5978653600860446"
+              diaginertia="9.65164e-05 6.60446e-05 5.82108e-05"/>
+            <joint name="leg_r2_joint" type="hinge" pos="0.0 0.0 0.0" axis="1.0 0.0 0.0"
+              range="-0.785 0.52" damping="0.0" stiffness="0.0" armature="0.05" frictionloss="0.075"/>
+            <geom type="mesh" mesh="leg_r2_link" contype="0" conaffinity="0" pos="0.0 0.0 0.0"
+              quat="1.0 0.0 0.0 0.0" material="white"/>
+            <geom name="leg_r2_collision" rgba="0 0.7 0.3 0.1" type="box" pos="0.0 0.0 0.0"
+              quat="1.0 0.0 0.0 0.0" size="5e-05 5e-05 5e-05" contype="1" conaffinity="1"
+              friction="1.0 0.005 0.0001"/>
+
+            <body name="leg_r3_link" pos="-0.03105 0.0 -0.07405" quat="1.0 0.0 0.0 0.0">
+              <inertial mass="0.905" pos="0.00017 -0.001688 -0.070673"
+                quat="0.9994190761366344 -0.0208749015902685 0.0007236900551313 -0.0269300020515515"
+                diaginertia="0.00233697 0.0023234 0.00053134"/>
+              <joint name="leg_r3_joint" type="hinge" pos="0.0 0.0 0.0" axis="0.0 0.0 1.0"
+                range="-0.785 0.52" damping="0.0" stiffness="0.0" armature="0.05" frictionloss="0.075"/>
+              <geom type="mesh" mesh="leg_r3_link" contype="0" conaffinity="0" pos="0.0 0.0 0.0"
+                quat="1.0 0.0 0.0 0.0" material="dark"/>
+              <geom name="leg_r3_collision" rgba="0 0.7 0.3 0.1" type="box" pos="0.0 0.0 0.0"
+                quat="1.0 0.0 0.0 0.0" size="5e-05 5e-05 5e-05" contype="1" conaffinity="1"
+                friction="1.0 0.005 0.0001"/>
+
+              <body name="leg_r4_link" pos="0.0 -0.03105 -0.11705" quat="1.0 0.0 0.0 0.0">
+                <inertial mass="0.5819" pos="0.000261 0.033885 -0.078429"
+                  quat="0.999918265120372 -0.0064927017214882 -0.0007957512109871 0.0109852029126391"
+                  diaginertia="0.00110556 0.000949375 0.000417765"/>
+                <joint name="leg_r4_joint" type="hinge" pos="0.0 0.0 0.0" axis="0.0 1.0 0.0"
+                  range="-0.3 2.3562" damping="0.0" stiffness="0.0" armature="0.05" frictionloss="0.075"/>
+                <geom type="mesh" mesh="leg_r4_link" contype="0" conaffinity="0" pos="0.0 0.0 0.0"
+                  quat="1.0 0.0 0.0 0.0" material="dark"/>
+                <geom name="leg_r4_collision" rgba="0 0.7 0.3 0.1" type="box" pos="0.0 0.03 -0.1"
+                  quat="1.0 0.0 0.0 0.0" size="0.0205 0.035 0.075" contype="1" conaffinity="1"
+                  friction="1.0 0.005 0.0001"/>
+
+                <body name="leg_r5_link" pos="0.0 0.0196 -0.20286" quat="1.0 0.0 0.0 0.0">
+                  <inertial mass="0.0641" pos="0.00260814 0.00912783 0.0166953"
+                    quat="0.2333469473324332 0.6777818470212655 0.6259458587209059 0.3071689306704444"
+                    diaginertia="0.00031591 0.000228233 0.000111589"/>
+                  <joint name="leg_r5_joint" type="hinge" pos="0.0 0.0 0.0" axis="0.0 1.0 0.0"
+                    range="-1.047 0.3" damping="0.0" stiffness="0.0" armature="0.05" frictionloss="0.075"/>
+                  <site name="right_foot" rgba="1 0 0 1" size="0.01" pos="0.027 0.012 -0.012"/>
+                  <geom type="mesh" mesh="leg_r5_link" contype="0" conaffinity="0" pos="0.0 0.0 0.0"
+                    quat="1.0 0.0 0.0 0.0" material="orange"/>
+                  <geom name="leg_r5_foot_geom" rgba="0 0.7 0.3 0.1" type="box" pos="0.027 0.012 -0.012"
+                    quat="1.0 0.0 0.0 0.0" size="0.0875 0.025 0.01" contype="1" conaffinity="1"
+                    friction="1.0 0.005 0.0001"/>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <!-- Damiao DM-J4340-2EC (24V) DC-motor model — MuJoCo-native `<dcmotor>`.
+         `nominal="V τ_stall ω_no_load"` fully determines K (back-EMF constant) and
+         R (terminal resistance):  K = V/ω_no_load = 3.74900 V·s/rad,
+         R = V·K/τ_stall = 1.66622 Ω, so MuJoCo integrates
+             τ = (K/R)·(v − K·q̇)      [= 2.2500·v − 8.4353·q̇]
+         with current saturation implicit in the voltage bound.
+
+         Source values (Damiao official bench curve, 97 points, r²=0.9916):
+         stall torque 54 N·m is the curve-derived value (mean error 0.85% against
+         the measured points vs 9.94% for the 40 N·m datasheet figure); no-load
+         speed 6.4017 rad/s is the measured extrapolation.
+         See ~/dm-actuator-model/params/dm_j4340_2ec.yaml (Q1, error 0.85%).
+
+         WHY NOT <position forcerange=±28>: a force-limited position servo is a
+         CONSTANT torque ceiling, independent of speed — it delivers its full
+         28 N·m even at 20 rad/s, whereas the real motor delivers 0 N·m at
+         6.4017 rad/s with a linear falloff in between. That missing τ-ω slope is
+         exactly what this variant restores.
+
+         input="voltage": MuJoCo owns the τ-ω + back-EMF physics; the position
+         loop lives in the action term (DmVoltageAction), which writes a voltage
+         into `ctrl` on EVERY physics substep. That split is what makes the
+         applied torque exactly observable in Python — the action term evaluates
+         the same closed form on the same state, with no backend hook needed.
+
+         ctrlrange="-24 24" bounds the supply voltage (== the bus voltage in
+         `nominal`), i.e. full PWM duty in both directions.
+
+         VERSION NOTE: `input="voltage"` is the MuJoCo 3.11 spelling (this venv is
+         3.11.0). 3.12+ replaces it with a space-separated signature list. -->
+    <dcmotor name="leg_l1_joint_motor" joint="leg_l1_joint" nominal="24 54 6.4017" input="voltage" ctrlrange="-24 24"/>
+    <dcmotor name="leg_l2_joint_motor" joint="leg_l2_joint" nominal="24 54 6.4017" input="voltage" ctrlrange="-24 24"/>
+    <dcmotor name="leg_l3_joint_motor" joint="leg_l3_joint" nominal="24 54 6.4017" input="voltage" ctrlrange="-24 24"/>
+    <dcmotor name="leg_l4_joint_motor" joint="leg_l4_joint" nominal="24 54 6.4017" input="voltage" ctrlrange="-24 24"/>
+    <dcmotor name="leg_l5_joint_motor" joint="leg_l5_joint" nominal="24 54 6.4017" input="voltage" ctrlrange="-24 24"/>
+    <dcmotor name="leg_r1_joint_motor" joint="leg_r1_joint" nominal="24 54 6.4017" input="voltage" ctrlrange="-24 24"/>
+    <dcmotor name="leg_r2_joint_motor" joint="leg_r2_joint" nominal="24 54 6.4017" input="voltage" ctrlrange="-24 24"/>
+    <dcmotor name="leg_r3_joint_motor" joint="leg_r3_joint" nominal="24 54 6.4017" input="voltage" ctrlrange="-24 24"/>
+    <dcmotor name="leg_r4_joint_motor" joint="leg_r4_joint" nominal="24 54 6.4017" input="voltage" ctrlrange="-24 24"/>
+    <dcmotor name="leg_r5_joint_motor" joint="leg_r5_joint" nominal="24 54 6.4017" input="voltage" ctrlrange="-24 24"/>
+  </actuator>
+
+  <sensor>
+    <velocimeter site="imu_in_torso" name="pelvis_local_linvel"/>
+    <gyro site="imu_in_torso" name="torso_gyro" cutoff="34.9" noise="0.0005"/>
+    <accelerometer site="imu_in_torso" name="torso_acceleration" cutoff="157" noise="0.01"/>
+    <framezaxis objtype="site" objname="imu_in_torso" name="torso_upvector"/>
+
+    <framepos objtype="site" objname="left_foot" name="left_foot_pos"/>
+    <framequat objtype="site" objname="left_foot" name="left_foot_quat"/>
+    <framezaxis objtype="site" objname="left_foot" name="left_foot_upvector"/>
+
+    <framepos objtype="site" objname="right_foot" name="right_foot_pos"/>
+    <framequat objtype="site" objname="right_foot" name="right_foot_quat"/>
+    <framezaxis objtype="site" objname="right_foot" name="right_foot_upvector"/>
+  </sensor>
+</mujoco>
