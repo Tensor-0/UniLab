@@ -32,9 +32,16 @@ from unisim.backend.isaacsim.dependencies import (
     resolve_isaacsim_runtime,
 )
 from unisim.backend.isaacsim.worker import (
-    _quat_rotate_wxyz,
     _resolve_articulation_root_prim_path,
 )
+
+# unisim-core >= 1.4.2 dropped the private `_quat_rotate_wxyz` helper from the
+# IsaacSim worker. The one test that exercised it is skipped when absent; the
+# rest of this module does not touch the helper.
+try:
+    from unisim.backend.isaacsim.worker import _quat_rotate_wxyz  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover - version-dependent
+    _quat_rotate_wxyz = None  # type: ignore[assignment]
 
 from unilab.base.backend_factory import create_backend
 from unilab.base.base import EnvCfg
@@ -530,6 +537,10 @@ def test_isaacsim_worker_timeout_has_backend_diagnostic(
         backend.close()
 
 
+@pytest.mark.skipif(
+    _quat_rotate_wxyz is None,
+    reason="unisim-core >= 1.4.2 removed the private _quat_rotate_wxyz helper",
+)
 def test_root_angular_velocity_helper_converts_body_to_world() -> None:
     half = np.sqrt(0.5)
     quat = np.array([[half, half, 0.0, 0.0]], dtype=np.float32)

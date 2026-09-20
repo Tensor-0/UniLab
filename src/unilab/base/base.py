@@ -252,7 +252,7 @@ class ABEnv(abc.ABC):
         record_video: bool | None = None,
         frame_state_getter: Callable[[], np.ndarray] | None = None,
         camera_kwargs: dict[str, Any] | None = None,
-        extra_data_getter: Callable[[], np.ndarray | None] | None = None,
+        debug_overlay_getter: Callable[[], Any] | None = None,
     ) -> str | None:
         """Execute playback through the backend contract."""
         raise NotImplementedError(f"{self.__class__.__name__} does not support playback execution")
@@ -269,7 +269,7 @@ class ABEnv(abc.ABC):
         render_offset_mode: str | None = None,
         frame_state_getter: Callable[[], np.ndarray] | None = None,
         camera_kwargs: dict[str, Any] | None = None,
-        extra_data_getter: Callable[[], np.ndarray | None] | None = None,
+        debug_overlay_getter: Callable[[], Any] | None = None,
         on_plan: Callable[[BackendPlayRenderPlan], None] | None = None,
     ) -> str | None:
         """Resolve configured playback mode and execute it through the backend contract."""
@@ -293,7 +293,7 @@ class ABEnv(abc.ABC):
             record_video=plan.record_video,
             frame_state_getter=frame_state_getter,
             camera_kwargs=camera_kwargs,
-            extra_data_getter=extra_data_getter,
+            debug_overlay_getter=debug_overlay_getter,
         )
 
     @property

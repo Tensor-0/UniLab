@@ -6,10 +6,12 @@ from typing import Any
 import numpy as np
 from unisim.dr.types import (
     DomainRandomizationCapabilities,
-    InitRandomizationPlan,
     IntervalRandomizationPlan,
     ResetPlan,
 )
+
+# TEMPORARY LOCAL EXPERIMENT SHIM — see unilab/dr/_compat.py for the full note.
+from ._compat import InitRandomizationPlan
 
 
 class DomainRandomizationProvider(abc.ABC):

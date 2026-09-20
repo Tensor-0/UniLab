@@ -30,7 +30,7 @@ def render_play_mode(
     record_video: bool | None = None,
     frame_state_getter: Callable[[], np.ndarray] | None = None,
     camera_kwargs: dict[str, Any] | None = None,
-    extra_data_getter: Callable[[], np.ndarray | None] | None = None,
+    debug_overlay_getter: Callable[[], Any] | None = None,
 ) -> str | None:
     """Run playback through the env/backend playback contract.
 
@@ -51,7 +51,7 @@ def render_play_mode(
             record_video=record_video,
             frame_state_getter=frame_state_getter,
             camera_kwargs=camera_kwargs,
-            extra_data_getter=extra_data_getter,
+            debug_overlay_getter=debug_overlay_getter,
         ),
     )
 

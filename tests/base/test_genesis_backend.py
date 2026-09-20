@@ -30,12 +30,14 @@ from unisim.backend.genesis.dependencies import (
 )
 from unisim.backend.genesis.materialization import preserve_torch_globals
 from unisim.dr.types import (
-    GeomSizeOverride,
-    InitRandomizationPlan,
     IntervalRandomizationPlan,
-    ModelVariantSpec,
     ResetRandomizationPayload,
 )
+
+# The init-variant API was removed in unisim-core >= 1.4.2 (replaced by
+# FixedVariantPlan / ModelSourceDescriptor). These three now resolve through
+# unilab.dr._compat, which raises on use.
+from unilab.dr import GeomSizeOverride, InitRandomizationPlan, ModelVariantSpec
 
 from unilab.base.backend_factory import create_backend, env_backend_kwargs
 from unilab.base.base import EnvCfg

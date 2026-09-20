@@ -12,14 +12,31 @@ from unisim.dr.types import (
     RESET_TERM_GRAVITY,
     RESET_TERM_KD,
     RESET_TERM_KP,
-    GeomSizeOverride,
-    InitRandomizationPlan,
     IntervalRandomizationPlan,
-    ModelVariantSpec,
     ResetRandomizationPayload,
 )
 
 from unilab.base.scene import SceneCfg
+from unilab.dr import GeomSizeOverride, InitRandomizationPlan, ModelVariantSpec
+
+# The init-variant API (`apply_init_randomization` + the three plan types above)
+# was removed in unisim-core >= 1.4.2 in favour of FixedVariantPlan /
+# ModelSourceDescriptor. `GeomSizeOverride` & co. now resolve through
+# unilab.dr._compat, which raises on use; the backend method is simply gone.
+def _motrix_supports_init_variant_api() -> bool:
+    try:
+        from unisim.backend.motrix.backend import MotrixBackend
+    except Exception:  # motrix deps absent
+        return False
+    return hasattr(MotrixBackend, "apply_init_randomization")
+
+
+_HAS_INIT_VARIANT_API = _motrix_supports_init_variant_api()
+
+_SKIP_INIT_VARIANT = pytest.mark.skipif(
+    not _HAS_INIT_VARIANT_API,
+    reason="unisim-core >= 1.4.2 removed apply_init_randomization (replaced by FixedVariantPlan)",
+)
 
 
 class _FakeMotrixLink:
@@ -404,6 +421,7 @@ def test_motrix_root_layout_uses_selected_body_floating_base_indices() -> None:
         backend.get_root_state_layout("missing")
 
 
+@_SKIP_INIT_VARIANT
 def test_motrix_backend_applies_init_geom_size_overrides(monkeypatch, tmp_path) -> None:
     mod, fake_model = _install_fake_motrix(monkeypatch, tmp_path)
     backend = mod.MotrixBackend(

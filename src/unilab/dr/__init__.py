@@ -10,15 +10,14 @@ from unisim.dr.types import (
     INTERVAL_TERM_BODY_TORQUE,
     INTERVAL_TERM_PUSH,
     DomainRandomizationCapabilities,
-    GeomSizeOverride,
-    InitRandomizationPlan,
     IntervalRandomizationPlan,
     IntervalTermOp,
-    ModelVariantSpec,
     ResetPlan,
     ResetRandomizationPayload,
 )
 
+# TEMPORARY LOCAL EXPERIMENT SHIM — see unilab/dr/_compat.py for the full note.
+from ._compat import GeomSizeOverride, InitRandomizationPlan, ModelVariantSpec
 from .manager import DomainRandomizationManager
 from .provider import DomainRandomizationProvider
 

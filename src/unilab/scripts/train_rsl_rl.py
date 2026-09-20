@@ -4,7 +4,7 @@ import statistics
 import sys
 import time
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 import hydra
 import torch
@@ -238,6 +238,27 @@ def _resolve_play_num_steps(cfg: DictConfig) -> int | None:
     return int(play_steps)
 
 
+def _ee_goal_debug_overlay(env: Any) -> Callable[[], Any] | None:
+    """Return the playback overlay getter for tasks that draw an EE goal.
+
+    Deliberately loud. Before unisim-core 1.7.2 this hook was
+    ``extra_data_getter`` and returned a raw ``np.ndarray``; 1.7.2 replaced it
+    with ``debug_overlay_getter``, which expects
+    ``unisim.backend.base.DebugPrimitive`` entries. Returning ``None`` here for
+    a task that actually has ``curr_ee_goal_world`` would make its overlay
+    vanish from rendered video with no signal at all, so this raises instead.
+    Nothing in this repository defines that attribute today.
+    """
+    if not hasattr(env, "curr_ee_goal_world"):
+        return None
+    raise NotImplementedError(
+        "This task exposes `curr_ee_goal_world`, but the playback overlay API "
+        "changed in unisim-core 1.7.2: `extra_data_getter` (an ndarray) became "
+        "`debug_overlay_getter` (DebugPrimitive entries). Port the overlay "
+        "before running playback for this task."
+    )
+
+
 def play_rsl_rl(cfg: DictConfig, device: str) -> str | None:
     """Play mode for RSL-RL."""
     rl_cfg = algo_config_dict(cfg)
@@ -376,11 +397,7 @@ def play_rsl_rl(cfg: DictConfig, device: str) -> str | None:
                     "cam_tracking_extra_envs": getattr(cfg.training, "cam_tracking_extra_envs", 2),
                 },
                 on_plan=_log_plan,
-                extra_data_getter=(
-                    (lambda: getattr(env, "curr_ee_goal_world", None))
-                    if hasattr(env, "curr_ee_goal_world")
-                    else None
-                ),
+                debug_overlay_getter=_ee_goal_debug_overlay(env),
             )
     except RenderClosedError:
         # Interface-level signal: the user closed the backend render window.
