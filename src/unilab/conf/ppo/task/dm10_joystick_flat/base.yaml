@@ -301,7 +301,17 @@ reward:
       threshold_min: 0.10
       threshold_max: 0.5
       command_name: twist
-      command_threshold: 0.5
+      # ⚠️ 2026-09-18 修：原值 0.5 使这一项【恒不生效】。
+      #   _command_gate（common/gait_terms.py:60-71）判据是【严格大于】：
+      #       total = |v_xy| + |w_z| ;  gate = total > command_threshold
+      #   而命令采样范围是 lin_vel_x=[0.3, 0.5]（上界恰好 0.5）
+      #   ⇒ 训练分布内 gate 恒为 False ⇒ 权重 0.8 恒 ×0。
+      #   铁证：4 条 run 的 tensorboard `reward/feet_air_time` 全部 = 0.000，
+      #   而同为门控项的 feet_clearance / feet_slip / feet_contact_number
+      #   （阈值均 0.01）都有正常非零值。
+      #   ⇒ 唯一直接奖励「脚离地」的项从未生效，这就是「蹭地走、腾空 0%」的根因。
+      #   改为 0.05：实测训练分布内 0/6 → 6/6 为真，且仍能区分「站着」与「走」。
+      command_threshold: 0.05
   under_speed:
     func: unilab.tasks.locomotion.g1.manager_terms.under_speed
     weight: -0.2

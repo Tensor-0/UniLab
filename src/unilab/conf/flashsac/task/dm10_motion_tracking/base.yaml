@@ -182,6 +182,12 @@ env:
         # :677 / :687) — so the policy must tolerate an unknown zero without
         # losing tracking. Enabled 2026-09-12 ahead of the right-leg ID=1 motor
         # returning from repair (its zero will likely differ).
+        #
+        # 2026-09-17: that motor is back and all ten are installed, so this range
+        # is now the *calibration tolerance* the policy was trained for — keep a
+        # real-robot joint-zero residual inside ±0.02 rad (~1.1 deg) and it is
+        # covered; anything larger is out of distribution. See
+        # `robot-deploy-toolkit/scripts/snapshot_state.py` for the read-only check.
         joint_default_position_range: [-0.02, 0.02]
   # Domain randomization, per the survey's improvement #7. Added 2026-09-12.
   #

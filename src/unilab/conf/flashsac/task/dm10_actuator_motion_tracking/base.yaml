@@ -1,0 +1,68 @@
+# @package _global_
+# Q3: DM10 motion-tracking trained on the REAL actuator model.
+#
+# Why a separate task config (not a runtime override)
+# ---------------------------------------------------
+# The trained run snapshots its config into `run_config.json`, and sim2sim
+# compares that snapshot against the play-time config. `env.actions` is in the
+# sim2sim DENYLIST (src/unilab/utils/sim2sim.py:40), so a play-time override of
+# the action term would be REJECTED under `training.sim2sim_strict: true`
+# (the default). Baking the actuator into the task config is therefore the only
+# way to get a checkpoint that can be played back normally.
+#
+# What this changes vs. dm10_motion_tracking/base
+# -----------------------------------------------
+# ONLY the actuator model + its action term. Everything else (rewards,
+# observations, terminations, commands, DR events) is inherited unchanged, so a
+# Q3-vs-baseline comparison differs in exactly one factor.
+#
+#   scene   : scene_flat.xml (constant-torque <position forcerange=±28>)
+#          -> scene_flat_actuator.xml (real DM-J4340-2EC τ-ω curve)
+#   action  : MotionJointPositionActionCfg (MuJoCo-internal PD, force domain)
+#          -> DmVoltageActionCfg (Python PD -> voltage, MuJoCo integrator)
+#
+# Gain choice (see HANDOFF-dm10-actuator.md §11)
+# ---------------------------------------------
+#   kp_voltage = 30 · R/K = 13.3333 V/rad   => dτ/de = 30 N·m/rad, identical to
+#                                              the baseline <position kp=30>
+#   kff_voltage = 2.4164 V·s/rad            => net damping = −2.998, i.e. the
+#                                              baseline's <position kv=3>
+#
+# ⚠️ kff_v is NOT cosmetic — it is the single decisive knob:
+#       kff_v = 0      -> net damping −8.435 (the motor's intrinsic back-EMF),
+#                         89.3 ± 7.9 steps, only 36 % of episodes finish
+#       kff_v = 2.4164 -> net damping −2.998, 162.7 ± 12.1 steps (≈ baseline)
+#     (4 seeds each, walk_left90, 600 control steps; HANDOFF §11.7)
+#
+#     Physically kff_v means "the drive compensates back-EMF". Whether the real
+#     DM-J4340-2EC firmware does this is NOT verified. If it does not, the
+#     correct Q3 config is kff_v = 0 and the policy must learn the higher
+#     damping instead — that is the `dm10_actuator_motion_tracking_noff`
+#     variant, which exists for exactly this A/B.
+defaults:
+  - /task/dm10_motion_tracking/base
+  - _self_
+
+training:
+  task_name: DM10MotionTrackingFlashSAC
+  sim_backend: mujoco
+
+env:
+  scene:
+    model_file: src/unilab/assets/robots/dm10/scene_flat_actuator.xml
+  actions:
+    joint_pos:
+      _target_: unilab.tasks.motion_tracking.dm10.actuator_action.DmVoltageActionCfg
+      entity_name: robot
+      actuator_names: [".*"]
+      scale: 0.25
+      use_default_offset: true
+      command_name: motion
+      # ── 电气参数：必须与 dm10_actuator.xml 的 nominal="24 54 6.4017" 一致 ──
+      bus_voltage: 24.0
+      stall_torque: 54.0
+      no_load_speed: 6.4017
+      # ── 控制律增益（电压域，不是力矩域）────────────────────────────────
+      kp_voltage: 13.3333333   # = 30 · R/K  ⇒ dτ/de = 30 N·m/rad
+      kd_voltage: 0.0
+      kff_voltage: 2.4164      # 反电动势前馈 ⇒ 净阻尼 −2.998 ≈ 基线的 −3.0

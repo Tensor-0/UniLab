@@ -1,0 +1,41 @@
+<mujoco model="dm10 scene">
+  <include file="_o.xml"/>
+
+  <statistic center="0 0 0.4" extent="0.9" meansize="0.05"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.1 0.1 0.1" specular="0.9 0.9 0.9"/>
+    <map fogstart="100.0" fogend="300.0"/>
+    <rgba haze="0.75 0.75 0.77 1"/>
+    <global azimuth="-130" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.55 0.55 0.57" rgb2="0.55 0.55 0.57" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" rgb1="0.62 0.62 0.63" rgb2="0.49 0.49 0.51"
+      width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="1.25 1.25" reflectance="0.0"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true" diffuse="0.8 0.8 0.8"/>
+    <!-- priority=2 (> the feet's 1) + condim=6: floor dictates foot-ground friction
+         so ground-friction domain randomization can actually move it. -->
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" priority="2" condim="6"/>
+  </worldbody>
+
+  <sensor>
+    <contact name="left_foot_contact_0" geom1="floor" geom2="leg_l5_foot_geom" data="found" num="1" reduce="mindist"/>
+    <contact name="right_foot_contact_0" geom1="floor" geom2="leg_r5_foot_geom" data="found" num="1" reduce="mindist"/>
+  </sensor>
+
+  <!-- Home: default bent-knee standing pose, matching the Damiao humanoid-gym
+       init_state (pos z=0.693, default_joint_angles l1=-0.4 l4=0.8 l5=-0.4,
+       legs mirrored). A bent-knee stance is required for walking — a straight-leg
+       (all-zero) home cannot flex/extend to produce forward propulsion. -->
+  <keyframe>
+    <key name="home"
+      qpos="0 0 0.693 1 0 0 0  -0.4 0 0 0.8 -0.4  -0.4 0 0 0.8 -0.4"
+      ctrl="-0.4 0 0 0.8 -0.4  -0.4 0 0 0.8 -0.4"/>
+  </keyframe>
+</mujoco>

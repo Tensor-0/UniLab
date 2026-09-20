@@ -1,0 +1,73 @@
+<mujoco model="dm10 scene">
+  <!-- Actuator-model variant scene: identical to ``scene_flat.xml`` except that it
+       includes ``dm10_actuator.xml`` (real DM-J4340-2EC torque-speed curve) instead
+       of ``dm10.xml`` (constant-torque <position> servo).
+
+       The two scenes must stay in lockstep — same floor geom name, same keyframe
+       pose, same contact sensors — so that an A/B measurement switches ONLY the
+       actuator model. Any edit here that is not mirrored in scene_flat.xml (or vice
+       versa) silently becomes a second experimental variable. -->
+  <!-- ISOLATION-EXPERIMENT VARIANT — never use for training.
+       Includes _sat_variant.xml, generated at runtime by
+       _measure_q2_actuator.py with the "volt saturation" option, which adds
+       saturation="N 0 0" to every dcmotor. That yields a CONSTANT N·m force
+       ceiling, mathematically homologous to the baseline position
+       forcerange of ±N.
+       Purpose: split "P4 beats P0" into the "force ceiling" and the
+       "feed-forward" factors. The included file exists only during such a run.
+       NOTE: the em dashes above are deliberate; an XML comment must not
+       contain two consecutive hyphens, so option names are not spelled out. -->
+  <include file="_sat_variant.xml"/>
+
+  <statistic center="0 0 0.4" extent="0.9" meansize="0.05"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.1 0.1 0.1" specular="0.9 0.9 0.9"/>
+    <map fogstart="100.0" fogend="300.0"/>
+    <rgba haze="0.75 0.75 0.77 1"/>
+    <global azimuth="-130" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.55 0.55 0.57" rgb2="0.55 0.55 0.57" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" rgb1="0.62 0.62 0.63" rgb2="0.49 0.49 0.51"
+      width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="1.25 1.25" reflectance="0.0"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true" diffuse="0.8 0.8 0.8"/>
+    <!-- priority=2 (> the feet's 1) + condim=6: floor dictates foot-ground friction
+         so ground-friction domain randomization can actually move it.
+         ⚠️ The geom name "floor" is referenced by conf/ppo/task/dm10_motion_tracking/
+         mujoco.yaml (env.scene.entities.robot.geom_names) — do not rename it. -->
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" priority="2" condim="6"/>
+  </worldbody>
+
+  <sensor>
+    <contact name="left_foot_contact_0" geom1="floor" geom2="leg_l5_foot_geom" data="found" num="1" reduce="mindist"/>
+    <contact name="right_foot_contact_0" geom1="floor" geom2="leg_r5_foot_geom" data="found" num="1" reduce="mindist"/>
+  </sensor>
+
+  <!-- Home: default bent-knee standing pose, matching the Damiao humanoid-gym
+       init_state (pos z=0.693, default_joint_angles l1=-0.4 l4=0.8 l5=-0.4,
+       legs mirrored). A bent-knee stance is required for walking — a straight-leg
+       (all-zero) home cannot flex/extend to produce forward propulsion.
+
+       ⚠️ `ctrl` IS ZERO HERE, UNLIKE scene_flat.xml. `ctrl` semantics follow the
+       actuator type: for the baseline <position> servo it is a position target
+       (hence the matching joint angles there), but for <dcmotor input="voltage">
+       it is a SUPPLY VOLTAGE. Copying the baseline's -0.4/0.8 values here would
+       silently command ±0.8 V instead of ±0 V. Zero volts = zero torque, which is
+       the correct "hold nothing" default.
+
+       Note: no code path currently applies a keyframe's ctrl (only key_qpos is
+       consumed, via SimBackend.get_keyframe_qpos), so this is a latent-invariant
+       fix rather than a behaviour change — but the two files must agree with their
+       own actuator type or the next reader will be misled. -->
+  <keyframe>
+    <key name="home"
+      qpos="0 0 0.693 1 0 0 0  -0.4 0 0 0.8 -0.4  -0.4 0 0 0.8 -0.4"
+      ctrl="0 0 0 0 0  0 0 0 0 0"/>
+  </keyframe>
+</mujoco>
