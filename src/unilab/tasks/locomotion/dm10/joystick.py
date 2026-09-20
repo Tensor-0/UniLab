@@ -11,3 +11,5 @@ from unilab.envs import ManagerBasedRlEnvCfg, make_manager_based_rl_env
 
 registry.register_env_config("DM10JoystickFlat", ManagerBasedRlEnvCfg)
 registry.register_env("DM10JoystickFlat", make_manager_based_rl_env, sim_backend="mujoco")
+# mjwarp 后端（2026-09-19 加，用于和 mujoco 做 A/B）。不设这行时 registry.make 会 KeyError。
+registry.register_env("DM10JoystickFlat", make_manager_based_rl_env, sim_backend="mjwarp")

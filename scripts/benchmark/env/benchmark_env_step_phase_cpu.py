@@ -141,7 +141,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     total_cpu = (_cpu_time() - cpu0) * 1000.0
 
     print(
-        f"pool nthread={env._backend._n_threads} num_envs={args.num_envs} "
+        f"pool nthread={getattr(env._backend, '_n_threads', 'n/a (gpu backend)')} num_envs={args.num_envs} "
         f"cpu_ids={'None' if args.cpu_ids is None else args.cpu_ids}"
     )
     print(f"iters={args.iters} total_resets={n_reset}")

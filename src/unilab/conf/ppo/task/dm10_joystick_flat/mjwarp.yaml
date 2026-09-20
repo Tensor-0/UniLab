@@ -1,0 +1,53 @@
+# @package _global_
+# mjwarp owner for the DM10 flat contract. Same env contract as the MuJoCo
+# owner (inherits base.yaml); only the physics backend differs. Keeps DENYLIST
+# parity with mujoco.yaml so an A/B switches exactly one thing.
+# Legacy mjwarp owners disable kp/kd + armature randomization (pd_gains: null).
+# Offline record reuses MuJoCo rendering; mjwarp has no native playback.
+defaults:
+  - /task/dm10_joystick_flat/base
+  - _self_
+
+training:
+  task_name: DM10JoystickFlat
+  sim_backend: mjwarp
+  play_render_mode: record
+  # Playback framing, same values as the MuJoCo owner.
+  play_env_num: 1
+  render_spacing: 2.0
+  cam_distance: 1.8
+  cam_azimuth: 145.0
+  cam_elevation: -5.0
+  cam_lookat: [0.0, 0.0, 0.40]
+  cam_tracking: true
+algo:
+  num_envs: 512
+  max_iterations: 3000
+  empirical_normalization: true
+  obs_groups:
+    actor:
+      - actor
+    critic:
+      - critic
+  policy:
+    init_noise_std: 0.5
+  algorithm:
+    learning_rate: 3.0e-4
+    entropy_coef: 1.0e-3
+env:
+  mjwarp_nconmax: 128
+  mjwarp_njmax: 256
+  events:
+    # Legacy mjwarp owners disable kp/kd and armature randomization.
+    pd_gains: null
+    # NOTE: base_mass / base_com / joint_armature would be much cheaper with
+    # ``mode: startup`` — model-field DR then recomputes derived constants
+    # (mujoco_warp.set_const, ~5.4 ms per control step) once at init instead of
+    # on every episode, which is what makes this backend competitive at all.
+    # That is measured: it took mjwarp from 0.86x to 1.31x versus CPU+Newton.
+    # It is NOT enabled here by default, because a 3000-iteration A/B at 512
+    # envs showed the startup arm's reward curve running ~20% behind the
+    # reset arm from iteration ~600 on. That is one seed per arm, so it may be
+    # run-to-run variance rather than a real effect (mjlab's guidance assumes
+    # 4k+ envs; 512 leaves only 512 distinct bodies in the whole run).
+    # Enable explicitly once the seed sweep settles it.

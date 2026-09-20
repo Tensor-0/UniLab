@@ -5,7 +5,7 @@
        leg mounting frames and inertials stay identical to the official model.
        Actuators are position (PD) servos using the official deployment gains
        (running_kp / running_kd from the Damiao sim2real config.yaml). -->
-  <option timestep="0.001" iterations="50" solver="PGS" gravity="0 0 -9.81"/>
+  <option timestep="0.001" iterations="50" solver="Newton" gravity="0 0 -9.81"/>
   <compiler angle="radian" autolimits="true" meshdir="assets"/>
 
   <default>
