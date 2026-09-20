@@ -48,7 +48,12 @@ from unilab.training import (
     should_run_playback,
 )
 from unilab.training.experiment import ExperimentTracker
-from unilab.training.onnx_export import export_policy_onnx, verify_policy_onnx
+from unilab.training.onnx_export import (
+    ObsManifestUnavailableError,
+    export_policy_onnx,
+    verify_policy_onnx,
+    write_obs_manifest,
+)
 from unilab.utils.checkpoint import (
     resolve_offpolicy_checkpoint_path as resolve_checkpoint_path,
 )
@@ -393,6 +398,29 @@ def play_offpolicy(algo_name: str, cfg: DictConfig) -> str | None:
             (onnx_feed, verify_priv_info) if verify_priv_info is not None else (onnx_feed,)
         )
         verify_policy_onnx(export_module, onnx_path, verify_inputs, input_names=input_names)
+
+        # Snapshot the policy input vector (term order + per-term widths) next to the graph.
+        # `run_config.json` records the observation *order* but not the widths, so without
+        # this the deploy-side layout check can only compare order.
+        #
+        # `ObsManifestUnavailableError` (env can't describe a layout) is downgraded to a warning:
+        # the manifest is auxiliary metadata, and crashing a finished run over it would be
+        # disproportionate. A layout/ONNX *mismatch* stays fatal — that means the artifact
+        # is internally inconsistent.
+        try:
+            write_obs_manifest(
+                onnx_path,
+                env,
+                task_name=str(getattr(cfg.training, "task_name", "")) or None,
+                algo=algo_name,
+            )
+        except ObsManifestUnavailableError as exc:
+            print(
+                f"WARNING: obs_manifest.json NOT written — {exc}\n"
+                "  The deploy-side contract check will only be able to verify observation"
+                " ORDER, not per-term widths.\n"
+                "  Backfill with: python _dump_obs_manifest.py --run-dir <this run dir>"
+            )
     elif load_path_dir is not None:
         print("Skipping ONNX export because training.export_onnx=false.")
 

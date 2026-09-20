@@ -34,7 +34,12 @@ from unilab.training import (
     should_run_playback,
 )
 from unilab.training.experiment import ExperimentTracker
-from unilab.training.onnx_export import export_policy_onnx, verify_policy_onnx
+from unilab.training.onnx_export import (
+    ObsManifestUnavailableError,
+    export_policy_onnx,
+    verify_policy_onnx,
+    write_obs_manifest,
+)
 from unilab.utils.checkpoint import resolve_appo_checkpoint_path
 from unilab.utils.seed import apply_configured_training_seed
 from unilab.visualization.interactive_playback import (
@@ -266,6 +271,23 @@ def play_appo(
         # Verify ONNX output matches PyTorch
         verify_input = torch.randn(1, obs_dim, device=device)
         verify_policy_onnx(export_module, onnx_path, (verify_input,), input_names=["obs"])
+
+        # Same observation-layout snapshot as the off-policy entrypoint: the deploy side
+        # needs per-term widths, which `run_config.json` does not record. An env that
+        # cannot describe a layout only downgrades this to a warning (see
+        # `ObsManifestUnavailableError`); a layout/ONNX mismatch stays fatal.
+        try:
+            write_obs_manifest(
+                onnx_path,
+                getattr(session, "wrapped_env", env),
+                task_name=str(getattr(cfg.training, "task_name", "")) or None,
+                algo="appo",
+            )
+        except ObsManifestUnavailableError as exc:
+            print(
+                f"WARNING: obs_manifest.json NOT written — {exc}\n"
+                "  Backfill with: python _dump_obs_manifest.py --run-dir <this run dir>"
+            )
 
     with torch.inference_mode():
         play_video_path = env.run_playback_mode(
