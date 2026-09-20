@@ -262,9 +262,16 @@ class ManagerBasedRlEnv(NpEnv):
         self._configure_action_control()
         self.set_autoreset(cfg.auto_reset)
 
-        if "startup" in self.event_manager.available_modes:
-            self.event_manager.apply(mode="startup")
         self._materialize_backend()
+        if "startup" in self.event_manager.available_modes:
+            # Startup events run through the same reset-state transaction as reset
+            # events so model-field terms (mass / CoM / inertia / armature) stage
+            # into one backend ``set_state`` instead of failing on an inactive
+            # transaction. This is why startup runs *after* materialization: model
+            # fields reach physics through ``set_state``, and the MuJoCo backend
+            # cannot serve that call before ``materialize()`` builds its pool.
+            with self._reset_state.scoped(self._all_env_ids):
+                self.event_manager.apply(mode="startup", env_ids=self._all_env_ids)
 
     def _materialize_backend(self) -> None:
         """Finalize backend runtime resources before the first reset or step."""

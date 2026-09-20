@@ -370,7 +370,9 @@ def _event(env: _TestEnv, env_ids: np.ndarray | None) -> None:
 
 
 def _startup_event(env: _TestEnv, env_ids: np.ndarray | None) -> None:
-    assert env_ids is None
+    # Startup events now run inside the reset-state transaction over all
+    # environments, so ``env_ids`` is concrete rather than ``None``.
+    assert env_ids is not None
     backend = cast(_FakeBackend, env._backend)
     backend.lifecycle.append("startup")
 
@@ -795,7 +797,7 @@ def test_manager_construction_uses_pinned_order(monkeypatch: pytest.MonkeyPatch)
     assert order == list(names)
 
 
-def test_backend_materializes_once_after_startup_and_before_runtime() -> None:
+def test_backend_materializes_once_before_startup_and_before_runtime() -> None:
     cfg = _make_cfg()
     cfg.events = {
         "startup": EventTermCfg(func=_startup_event, mode="startup"),
@@ -803,7 +805,10 @@ def test_backend_materializes_once_after_startup_and_before_runtime() -> None:
     }
     env, backend = _make_env(cfg)
 
-    assert backend.lifecycle == ["startup", "materialize"]
+    # Order is materialize-then-startup: startup runs through the reset-state
+    # transaction, whose commit calls backend.set_state(), and the MuJoCo backend
+    # cannot serve that before materialize() builds its pool.
+    assert backend.lifecycle == ["materialize", "startup"]
     assert backend.materialize_calls == 1
 
     env.reset()

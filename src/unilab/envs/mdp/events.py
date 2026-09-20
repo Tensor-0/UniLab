@@ -226,13 +226,23 @@ def _validate_event_term(
     cfg: EventTermCfg,
     *,
     term_name: str,
-    mode: str,
+    modes: str | tuple[str, ...],
     allowed_params: frozenset[str],
     required_params: tuple[str, ...],
 ) -> None:
-    if cfg.mode != mode:
+    """Reject unsupported event modes loudly.
+
+    ``modes`` accepts a single mode or a tuple. Model-field DR terms that only
+    write through the reset-state transaction pass ``("reset", "startup")``:
+    startup draws the per-environment parameters once, at the first reset,
+    instead of redrawing them on every episode (mjlab's documented guidance for
+    fields that need ``set_const`` recomputation).
+    """
+    allowed = (modes,) if isinstance(modes, str) else tuple(modes)
+    if cfg.mode not in allowed:
+        joined = " or ".join(f"mode='{name}'" for name in allowed)
         raise NotImplementedError(
-            f"EventManager term '{term_name}' only supports mode='{mode}' on the UniLab runtime"
+            f"EventManager term '{term_name}' only supports {joined} on the UniLab runtime"
         )
     unknown = sorted(set(cfg.params) - allowed_params)
     if unknown:
@@ -265,7 +275,7 @@ class _ModelFieldRandomizer(ManagerTermBase):
         _validate_event_term(
             cfg,
             term_name=self._term_name,
-            mode="reset",
+            modes=("reset", "startup"),
             allowed_params=self._PARAMS,
             required_params=("ranges",),
         )
@@ -588,10 +598,11 @@ class PdGains(ManagerTermBase):
 
     def __init__(self, cfg: EventTermCfg, env: ManagerBasedRlEnv):
         super().__init__(env)
-        if cfg.mode != "reset":
+        if cfg.mode not in ("reset", "startup"):
             raise NotImplementedError(
-                "EventManager term 'pd_gains' only supports mode='reset' on the UniLab "
-                "set_state transaction; startup/interval/step model-field mutation is unavailable"
+                "EventManager term 'pd_gains' only supports mode='reset' or mode='startup' "
+                "on the UniLab set_state transaction; interval/step model-field mutation "
+                "is unavailable"
             )
         unknown = sorted(set(cfg.params) - _PD_GAIN_PARAM_NAMES)
         if unknown:
@@ -691,7 +702,7 @@ class RandomizeRigidBodyMass(ManagerTermBase):
         _validate_event_term(
             cfg,
             term_name=term_name,
-            mode="reset",
+            modes=("reset", "startup"),
             allowed_params=self._PARAMS,
             required_params=("asset_cfg", "mass_distribution_params", "operation"),
         )
@@ -849,7 +860,7 @@ class RandomizeBodyMassInertia(ManagerTermBase):
         _validate_event_term(
             cfg,
             term_name=term_name,
-            mode="reset",
+            modes=("reset", "startup"),
             allowed_params=self._PARAMS,
             required_params=("asset_cfg", "scale_range"),
         )
@@ -934,7 +945,7 @@ class RandomizeRigidBodyCom(ManagerTermBase):
         _validate_event_term(
             cfg,
             term_name=term_name,
-            mode="reset",
+            modes=("reset", "startup"),
             allowed_params=frozenset(("com_range", "asset_cfg")),
             required_params=("com_range", "asset_cfg"),
         )
@@ -999,7 +1010,7 @@ class RandomizePhysicsSceneGravity(ManagerTermBase):
         _validate_event_term(
             cfg,
             term_name=term_name,
-            mode="reset",
+            modes="reset",
             allowed_params=frozenset(("gravity_distribution_params", "operation", "distribution")),
             required_params=("gravity_distribution_params", "operation"),
         )
@@ -1076,7 +1087,7 @@ class PushBySettingVelocity(ManagerTermBase):
         _validate_event_term(
             cfg,
             term_name=term_name,
-            mode="interval",
+            modes="interval",
             allowed_params=frozenset(("velocity_range", "asset_cfg")),
             required_params=("velocity_range",),
         )
@@ -1209,7 +1220,7 @@ class ApplyBodyImpulse(ManagerTermBase):
         _validate_event_term(
             cfg,
             term_name=term_name,
-            mode="step",
+            modes="step",
             allowed_params=self._PARAMS,
             required_params=("force_range", "torque_range", "duration_s", "cooldown_s"),
         )
@@ -1381,7 +1392,7 @@ class RandomizeEncoderBias(ManagerTermBase):
         _validate_event_term(
             cfg,
             term_name=term_name,
-            mode="reset",
+            modes="reset",
             allowed_params=frozenset(("bias_range", "asset_cfg")),
             required_params=("bias_range", "asset_cfg"),
         )

@@ -452,7 +452,7 @@ def test_pd_gains_event_supports_log_uniform_absolute_sampling() -> None:
 @pytest.mark.parametrize(
     ("cfg_kwargs", "match"),
     [
-        ({"mode": "startup"}, "only supports mode='reset'"),
+        ({"mode": "step"}, "only supports mode='reset' or mode='startup'"),
         ({"params": {"kp_range": (2.0, 1.0), "kd_range": (1.0, 1.0)}}, "minimum"),
     ],
 )
@@ -709,6 +709,62 @@ def test_reset_randomization_sparse_rows_abort_without_backend_mutation() -> Non
             mdp.reset_scene_to_default(env, ids)
             cfg.func(env, np.array([0], dtype=np.int32), **cfg.params)
     assert backend.set_state_calls == []
+
+
+_STARTUP_MODEL_FIELD_CASES: dict[str, dict[str, Any]] = {
+    "mass": {
+        "func": mdp.randomize_rigid_body_mass,
+        "params": {
+            "asset_cfg": SceneEntityCfg("robot", body_names=("base",)),
+            "mass_distribution_params": (0.9, 1.1),
+            "operation": "scale",
+            "recompute_inertia": False,
+        },
+    },
+    "com": {
+        "func": mdp.randomize_rigid_body_com,
+        "params": {
+            "asset_cfg": SceneEntityCfg("robot", body_names=("base",)),
+            "com_range": {"x": (-0.01, 0.01), "y": (-0.01, 0.01), "z": (-0.01, 0.01)},
+        },
+    },
+    "pd_gains": {
+        "func": mdp.pd_gains,
+        "params": {"kp_range": (1.0, 1.0), "kd_range": (1.0, 1.0)},
+    },
+}
+
+
+@pytest.mark.parametrize("case", sorted(_STARTUP_MODEL_FIELD_CASES))
+def test_model_field_terms_accept_startup_mode(case: str) -> None:
+    """Model-field DR terms accept ``mode="startup"``.
+
+    ``startup`` draws each environment's parameters once, through the same
+    reset-state transaction as ``reset``, instead of redrawing them on every
+    episode. That is the documented workaround for backends where applying model
+    fields costs a full derived-quantity recomputation (``set_const``).
+
+    Regression guard: these terms used to reject any mode other than ``reset``
+    with ``NotImplementedError``.
+    """
+    spec = _STARTUP_MODEL_FIELD_CASES[case]
+    env, backend, transaction = _transaction_env(rng_seed=7)
+    manager = EventManager(
+        {"term": EventTermCfg(func=spec["func"], mode="startup", params=spec["params"])},
+        env,
+    )
+    ids = np.arange(backend.num_envs, dtype=np.int32)
+
+    with transaction.scoped(ids):
+        manager.apply(mode="startup", env_ids=ids)
+
+    assert len(backend.set_state_calls) == 1
+    payload = backend.randomization_calls[-1]
+    assert payload is not None
+    # Every environment row is drawn, not a single broadcast value.
+    field = payload.body_mass if case == "mass" else None
+    if field is not None:
+        assert np.unique(field).size > 1
 
 
 def test_min_step_count_gating_reuses_committed_field_values() -> None:
