@@ -297,12 +297,20 @@ python3 scripts/probe_direction.py --bus can2 --motor-id 2 --enable-check --conf
 - **固定命令 `vx=0.4`**（训练分布 0.3~0.5 的中值）
 - **从 `home` 关键帧静止起步**（对应真机"PD 站到默认角"）
 
+> ⚠️ **本节记录的是 2026-09-17 的实测值，属于【屈膝参考系】时代。**
+> 2026-09-21 项目把 `home` 从屈膝改成了**直腿全零**（`base_z` 0.693 → 0.7222），
+> 部署侧 `joint_default_angle` 同步改成全零。参考系一换，下面这些数字**在今天的
+> 仓库状态下复现不出来** —— 用它们必须先把三处改回屈膝：
+> `scene_flat.xml` 的 home / 部署 `default.yaml` / `HOME_BASE_Z`。
+> 存档与回滚步骤：`~/dm10-home-bent-backup-20260921/README.md`
+> 原样的脚本产物也冻在 `~/dm10-home-bent-backup-20260921/ref_artifacts/`。
+
 ⚠️ **每个开关都从【活对象】读回验证真的生效**（不是"我以为生效了"）：
 ```
-✅ root 在原点、z=0.693（无位姿随机化）
+✅ root 在原点、z=0.693（无位姿随机化）        ← 屈膝参考系时代
 ✅ root 初速为 0 ✅ gravity=[0,0,-1]（无噪声）
 ✅ dof_pos_rel=0 ⇒ 默认角 = home 位姿  ← 这一条把"推断"变成"实测"
-✅ 关节角 = [-0.4,0,0,0.8,-0.4]×2
+✅ 关节角 = [-0.4,0,0,0.8,-0.4]×2              ← 屈膝参考系时代
 ```
 
 **产物**：`robot-deploy-toolkit/results/dm10_ref_run/`
