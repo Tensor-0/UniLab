@@ -19,7 +19,27 @@ training:
   # Follow the robot so a long clip keeps it centred (fixed camera drifts off).
   cam_tracking: true
 algo:
-  num_envs: 512
+  # 512 -> 2048 (2026-09-21). The old 512 had no justification anywhere: it was a
+  # bare value from the task's first commit (67e1e141) with no comment, and the
+  # same robot's dm10_motion_tracking task uses 1024. Measured on this machine by
+  # running 250-iteration runs SERIALLY (each with the whole box to itself):
+  #
+  #   envs      wall(s)     fps     ms/iter   samples/iter   vs 512
+  #    512       66.87    45,940      267        12,288      1.000x
+  #   1024      114.03    53,880      456        24,576      1.173x
+  #   2048      211.05    58,224      844        49,152      1.267x
+  #
+  # Each doubling costs less than 2x wall time (+71 %, then +85 %) while doubling
+  # the batch, so throughput per step still improves and the physics phase is not
+  # yet saturated. 4096 was NOT tested — 2048 is the largest that fits this box
+  # (RTX 4060 8 GB / 22 threads).
+  # ⚠️ The learning side is NOT established: at 1 seed the final rewards did not
+  # order monotonically. The only monotone signal was p90 reward (26.5 / 28.3 /
+  # 37.8). Re-check before quoting a quality claim.
+  # ⚠️ More envs is not automatically better — past the wall-time crossover it
+  # buys batch size at the cost of throughput, which for this CPU-bound physics
+  # is close to a wash.
+  num_envs: 2048
   max_iterations: 3000
   empirical_normalization: true
   obs_groups:
