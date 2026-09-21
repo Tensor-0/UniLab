@@ -25,6 +25,13 @@ _ACTION_DIM = 10
 
 
 def _make_env(task: str, *, num_envs: int, hold: bool = False, config_root: str = "ppo"):
+    """Build an env with `hold_on_clip_end` set EXPLICITLY.
+
+    Always writes the flag in both directions rather than relying on the task
+    yaml's default: dm10_stand turns it on, and a test that silently inherited
+    that would start asserting the opposite of what its name says the moment the
+    yaml changed (which is exactly what happened once).
+    """
     registry.ensure_registries()
     GlobalHydra.instance().clear()
     with initialize_config_dir(
@@ -35,8 +42,7 @@ def _make_env(task: str, *, num_envs: int, hold: bool = False, config_root: str 
         owner, root_dir=_ROOT, algo_name=config_root
     ).build_task_env_cfg_override()
     override["auto_reset"] = False
-    if hold:
-        override["commands"]["motion"]["params"]["hold_on_clip_end"] = True
+    override["commands"]["motion"]["params"]["hold_on_clip_end"] = hold
     return registry.make(
         str(owner.training.task_name),
         num_envs=num_envs,
