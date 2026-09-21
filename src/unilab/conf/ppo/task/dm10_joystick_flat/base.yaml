@@ -360,7 +360,12 @@ reward:
     func: unilab.tasks.locomotion.common.manager_terms.base_height_l2
     weight: -300.0
     params:
-      target_height: 0.693
+      # 2026-09-21: was 0.693 (the bent-knee home height). The home keyframe is
+      # now straight-leg at 0.7222, so leaving this behind would put a -300 weight
+      # on a permanent 2.9 cm error and drag the policy back down to a crouch.
+      # ⚠️ Hardcoded on purpose (base_height_l2 does not read default_joint_pos),
+      # so it does NOT track the keyframe automatically — change both together.
+      target_height: 0.7222
   orientation:
     func: unilab.tasks.locomotion.common.sensor_reward_terms.orientation
     weight: -5.0

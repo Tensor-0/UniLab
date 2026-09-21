@@ -1,5 +1,19 @@
 <mujoco model="dm10 scene">
-  <include file="_o.xml"/>
+  <!-- Mass-model variant scene: identical to ``scene_flat.xml`` except that it
+       includes ``dm10_measured.xml`` (12 bodies re-weighed on the real robot,
+       6.12 kg total) instead of ``dm10.xml`` (the 10.86 kg CAD-derived estimate).
+
+       The scenes must stay in lockstep — same floor geom name, same keyframe
+       pose, same contact sensors — so that a comparison switches ONLY the mass
+       model. Any edit here that is not mirrored in scene_flat.xml (or vice versa)
+       silently becomes a second experimental variable.
+
+       Why this file exists: ``dm10_measured.xml`` is the only model that is both
+       (a) mass-corrected against the real robot and (b) actuated the way the real
+       robot actually runs — Damiao MIT mode is position + firmware gains, i.e.
+       the <position> servo, NOT the <dcmotor> voltage model. Before this file the
+       "measured mass + position" combination had no scene at all. -->
+  <include file="dm10_measured.xml"/>
 
   <statistic center="0 0 0.4" extent="0.9" meansize="0.05"/>
 
@@ -20,7 +34,9 @@
   <worldbody>
     <light pos="0 0 1.5" dir="0 0 -1" directional="true" diffuse="0.8 0.8 0.8"/>
     <!-- priority=2 (> the feet's 1) + condim=6: floor dictates foot-ground friction
-         so ground-friction domain randomization can actually move it. -->
+         so ground-friction domain randomization can actually move it.
+         ⚠️ The geom name "floor" is referenced by conf/ppo/task/dm10_motion_tracking/
+         mujoco.yaml (env.scene.entities.robot.geom_names) — do not rename it. -->
     <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" priority="2" condim="6"/>
   </worldbody>
 

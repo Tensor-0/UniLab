@@ -49,25 +49,38 @@
     <contact name="right_foot_contact_0" geom1="floor" geom2="leg_r5_foot_geom" data="found" num="1" reduce="mindist"/>
   </sensor>
 
-  <!-- Home: default bent-knee standing pose, matching the Damiao humanoid-gym
-       init_state (pos z=0.693, default_joint_angles l1=-0.4 l4=0.8 l5=-0.4,
-       legs mirrored). A bent-knee stance is required for walking — a straight-leg
-       (all-zero) home cannot flex/extend to produce forward propulsion.
+  <!-- Home: default STRAIGHT-LEG standing pose (all joint angles zero).
+       base_z = 0.7222 places the foot geom exactly on the floor — measured, not
+       guessed (the bent-knee pose needs 0.6911; the old 0.693 left 1.9 mm of air).
 
-       ⚠️ `ctrl` IS ZERO HERE, UNLIKE scene_flat.xml. `ctrl` semantics follow the
-       actuator type: for the baseline <position> servo it is a position target
-       (hence the matching joint angles there), but for <dcmotor input="voltage">
-       it is a SUPPLY VOLTAGE. Copying the baseline's -0.4/0.8 values here would
-       silently command ±0.8 V instead of ±0 V. Zero volts = zero torque, which is
-       the correct "hold nothing" default.
+       Replaced the Damiao humanoid-gym bent-knee init_state on 2026-09-21, for
+       three measured reasons:
+         * straight-leg hold is nearly free: peak |tau| 0.02 N.m over 5 s vs
+           1.70 N.m bent-knee — the CoM sits over the feet, so the load path runs
+           through the structure instead of the joints;
+         * the leg Jacobian IS singular at knee=0, but its singular direction is
+           VERTICAL — the direction the structure already carries. Horizontal
+           force costs 0.394 N.m/N vs 0.363 bent: 8 % worse, not catastrophic;
+         * the 10.86 kg CAD-mass model cannot hold the bent-knee pose at all
+           (collapses 0.63 m in 3 s at kp=30); the measured 6.12 kg model can.
 
-       Note: no code path currently applies a keyframe's ctrl (only key_qpos is
-       consumed, via SimBackend.get_keyframe_qpos), so this is a latent-invariant
-       fix rather than a behaviour change — but the two files must agree with their
-       own actuator type or the next reader will be misled. -->
+       ⚠️ This keyframe is the policy REFERENCE FRAME, not just a reset pose:
+       default_keyframe_name: home -> default_joint_pos -> action offset
+       (actions.py:214) + obs zero point (observations.py:230) + the weighted_pose
+       reward target (locomotion/g1/manager_terms.py:784). It must stay
+       numerically equal to `joint_default_angle` in roboparty_deploy's dm10
+       configs, which plays the same role at inference time.
+
+       ⚠️ `ctrl` MEANS SOMETHING DIFFERENT HERE THAN IN scene_flat.xml. `ctrl`
+       semantics follow the actuator type: for the baseline <position> servo it is
+       a position target, but for <dcmotor input="voltage"> it is a SUPPLY VOLTAGE.
+       With an all-zero home the two happen to coincide, so this file's ctrl is
+       now identical to the baseline's — but the distinction still has to be
+       written down, or the next reader who changes the angles will silently
+       command volts and get zero torque. -->
   <keyframe>
     <key name="home"
-      qpos="0 0 0.693 1 0 0 0  -0.4 0 0 0.8 -0.4  -0.4 0 0 0.8 -0.4"
+      qpos="0 0 0.7222 1 0 0 0  0 0 0 0 0  0 0 0 0 0"
       ctrl="0 0 0 0 0  0 0 0 0 0"/>
   </keyframe>
 </mujoco>
