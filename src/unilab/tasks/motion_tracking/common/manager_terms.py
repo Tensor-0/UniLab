@@ -80,6 +80,21 @@ class MotionCommandParamsCfg:
     sampling_mode: SamplingMode = "adaptive"
     sampling_start_ratio: float = 0.0
     truncate_on_clip_end: bool = False
+    hold_on_clip_end: bool = False
+    """True: when a clip plays out, pin the frame index to its last frame and set
+    ``motion_ended`` instead of resampling a new clip.
+
+    The reference buffers then hold the final frame, so the tracking rewards
+    degrade into "stay on the last pose" and a reward gated on ``motion_ended``
+    (see ``stand_still_after_motion``) has a window to act in. Ported from
+    BeyondMimic's ``reset_on_motion_end=False`` + ``motion_ended`` pair.
+
+    Default False keeps the existing behaviour: resample the clip and teleport
+    the robot. NOTE this is deliberately NOT ``truncate_on_clip_end`` — that flag
+    means "skip the resample", which leaves an out-of-range frame index that
+    raises IndexError in ``MotionLoader.get_motion_at_frame`` unless a
+    ``motion_clip_end`` termination removes the row first. This one pins the
+    index into range, so it is safe with or without that termination."""
     pose_range: dict[str, tuple[float, float]] = field(default_factory=dict)
     velocity_range: dict[str, tuple[float, float]] = field(default_factory=dict)
     joint_position_range: tuple[float, float] = (-0.1, 0.1)
@@ -259,6 +274,14 @@ class MotionCommand(CommandTerm):
             raise ValueError("MotionCommandCfg sampling_start_ratio must be within [0, 1]")
         if not isinstance(cfg.params.truncate_on_clip_end, bool):
             raise TypeError("MotionCommandCfg truncate_on_clip_end must be bool")
+        if not isinstance(cfg.params.hold_on_clip_end, bool):
+            raise TypeError("MotionCommandCfg hold_on_clip_end must be bool")
+        if cfg.params.hold_on_clip_end and cfg.params.truncate_on_clip_end:
+            raise ValueError(
+                "MotionCommandCfg hold_on_clip_end and truncate_on_clip_end are mutually "
+                "exclusive: the former pins the frame index to the last frame, the latter "
+                "skips the resample and leaves the index out of range."
+            )
 
     @property
     def command(self) -> np.ndarray:
@@ -271,6 +294,17 @@ class MotionCommand(CommandTerm):
     @property
     def joint_vel(self) -> np.ndarray:
         return self._motion_data.joint_vel
+
+    @property
+    def motion_ended(self) -> np.ndarray:
+        """Per-row flag: the reference clip has played out and its frame index is
+        pinned to the last frame (only ever True with ``hold_on_clip_end``).
+
+        Consumed by reward terms such as ``stand_still_after_motion``. Note the
+        env computes rewards before commands each step, so a term reading this
+        sees the previous step's value — same one-step lag as Isaac Lab.
+        """
+        return self.sampler.motion_ended
 
     @property
     def body_pos_w(self) -> np.ndarray:
@@ -574,8 +608,20 @@ class MotionCommand(CommandTerm):
         self.sampler.update_failure_stats(self._env.termination_manager.terminated)
         active_ids = np.flatnonzero(~self._env.reset_buf).astype(np.int32, copy=False)
         wrap_ids = self.sampler.step(active_ids)
-        if len(wrap_ids) and not self.cfg.params.truncate_on_clip_end:
-            self._resample_command(wrap_ids)
+        if len(wrap_ids):
+            if self.cfg.params.hold_on_clip_end:
+                # Pin the frame index onto the clip's last frame so the reference
+                # buffers freeze there, and flag the row as ended. `time_steps` IS
+                # `sampler.current_frames` (an alias, not a copy), so this write is
+                # what `_refresh_motion` below will read.
+                #
+                # Only the rows that just wrapped are touched: active_ids already
+                # excludes reset_buf rows, so these are exactly the rows that were
+                # advanced past their clip end this step.
+                self.time_steps[wrap_ids] = self.sampler.current_clip_end_frames[wrap_ids]
+                self.sampler.motion_ended[wrap_ids] = True
+            elif not self.cfg.params.truncate_on_clip_end:
+                self._resample_command(wrap_ids)
         self._refresh_motion()
 
     def post_compute(self) -> None:
@@ -694,6 +740,29 @@ def _positive_std(value: float, *, term_name: str) -> float:
     result = float(value)
     if not math.isfinite(result) or result <= 0.0:
         raise ValueError(f"{term_name} std must be finite and positive")
+    return result
+
+
+def _real_gain(term_name: str, name: str, value: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float, np.number)):
+        raise TypeError(f"{term_name} {name} must be a real number")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{term_name} {name} must be finite")
+    return result
+
+
+def _nonnegative(term_name: str, name: str, value: float) -> float:
+    result = _real_gain(term_name, name, value)
+    if result < 0.0:
+        raise ValueError(f"{term_name} {name} must be non-negative")
+    return result
+
+
+def _positive(term_name: str, name: str, value: float) -> float:
+    result = _real_gain(term_name, name, value)
+    if result <= 0.0:
+        raise ValueError(f"{term_name} {name} must be positive")
     return result
 
 
@@ -1088,6 +1157,73 @@ def motion_clip_end(env: ManagerBasedRlEnv, command_name: str) -> np.ndarray:
     return command.time_steps >= command.sampler.current_clip_end_frames
 
 
+def stand_still_after_motion(
+    env: ManagerBasedRlEnv,
+    command_name: str,
+    pos_weight: float = 1.0,
+    vel_weight: float = 0.04,
+    upright_gate: float = 0.7,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> np.ndarray:
+    """Penalize joint deviation from the default pose once the reference has ended.
+
+    Ported from BeyondMimic's ``stand_still_after_motion``
+    (robolab/tasks/manager_based/beyondmimic/mdp/rewards.py:138-165). Returns a
+    COST, so register it with a negative weight.
+
+        pos  = pos_weight * sum_j |q_j - q_default_j|
+        vel  = vel_weight * sum_j |dq_j|
+        gate = clip(-projected_gravity_b[:, 2], 0, upright_gate) / upright_gate
+        value = (pos + vel) * gate * motion_ended
+
+    Two gates, both load-bearing:
+
+    * ``motion_ended`` — zero unless ``hold_on_clip_end`` pinned this row's frame
+      index to the last frame. So with the default config this term contributes
+      exactly zero and costs nothing.
+    * upright — ``-g_b[2]`` is cos(tilt), so the term vanishes past ~45 deg of
+      tilt. Without it a fallen robot is still punished for being out of pose,
+      which fights the termination instead of encouraging recovery.
+
+    ⚠️ Returns a freshly allocated array and never writes through ``asset.data``
+    views: RewardManager consumes term outputs into a *shared* scratch buffer and
+    documents that ``value`` must not be mutated (reward_manager.py:134-137).
+
+    ⚠️ The env computes rewards *before* commands each step
+    (manager_based_rl_env.py:477 vs :500), so ``motion_ended`` here reflects the
+    previous step. Isaac Lab orders it the same way, which is why the reference
+    weights below transfer.
+
+    ⚠️ ``pos_weight``/``vel_weight``/``upright_gate`` come from robolab's getup
+    task (a different robot and a different motion). Treat them as a starting
+    point, not a tuned answer: dm10_stand's reference is already an upright
+    standing pose, so ``pos`` is naturally small and the term may need a larger
+    weight to do anything. Print ``Episode_Reward/stand_still_after_motion``
+    rather than assuming it is active — this repo has been bitten before by a
+    gated term being silently always-zero (the ``feet_air_time`` incident).
+    """
+    command = _command(env, command_name)
+    asset = env.scene[asset_cfg.name]
+    pos_gain = _nonnegative("stand_still_after_motion", "pos_weight", pos_weight)
+    vel_gain = _nonnegative("stand_still_after_motion", "vel_weight", vel_weight)
+    gate_scale = _positive("stand_still_after_motion", "upright_gate", upright_gate)
+
+    joint_pos = np.asarray(asset.data.joint_pos[:, asset_cfg.joint_ids])
+    joint_vel = np.asarray(asset.data.joint_vel[:, asset_cfg.joint_ids])
+    default = np.asarray(asset.data.default_joint_pos[:, asset_cfg.joint_ids])
+
+    pos_err = np.sum(np.abs(joint_pos - default), axis=1)
+    vel_err = np.sum(np.abs(joint_vel), axis=1)
+    # Allocate the result; do not reuse `pos_err` in place (see the docstring).
+    value = pos_gain * pos_err + vel_gain * vel_err
+
+    upright = np.asarray(asset.data.projected_gravity_b)[:, 2]
+    tilt_gate = np.clip(-upright, 0.0, gate_scale) / gate_scale
+    value = value * tilt_gate
+
+    return np.where(command.motion_ended, value, 0.0)
+
+
 __all__ = [
     "MotionCommand",
     "MotionCommandCfg",
@@ -1102,6 +1238,7 @@ __all__ = [
     "motion_anchor_ori_b",
     "motion_anchor_pos_b",
     "motion_clip_end",
+    "stand_still_after_motion",
     "motion_global_anchor_orientation_error_exp",
     "motion_global_anchor_position_error_exp",
     "motion_global_body_angular_velocity_error_exp",

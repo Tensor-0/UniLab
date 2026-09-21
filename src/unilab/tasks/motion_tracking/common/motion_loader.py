@@ -366,6 +366,11 @@ class MotionSampler:
         self.current_clip_end_frames = np.full(
             num_envs, motion_loader.clip_end_frames[0], dtype=np.int32
         )
+        # True for rows whose reference clip has played out and whose frame index
+        # has been pinned to the last frame (see MotionCommand._update_command and
+        # MotionCommandParamsCfg.hold_on_clip_end). Cleared whenever frames are
+        # resampled, i.e. whenever the reference restarts.
+        self.motion_ended = np.zeros(num_envs, dtype=bool)
 
         # Adaptive sampling parameters
         if bin_count is None:
@@ -584,6 +589,11 @@ class MotionSampler:
         clip_indices = self.motion_loader.get_clip_indices(frames)
         self.current_clip_indices[env_ids] = clip_indices
         self.current_clip_end_frames[env_ids] = self.motion_loader.clip_end_frames[clip_indices]
+        # Resampling restarts the reference, so the row is no longer "ended".
+        # This is the single choke point for every sampling mode (all five
+        # _sample_* helpers route through here), which is why the clear lives
+        # here and not in MotionCommand.reset — that one does not touch frames.
+        self.motion_ended[env_ids] = False
 
     def step(self, env_ids: np.ndarray | None = None) -> np.ndarray:
         """Advance selected frames by one step and return their clip-end rows."""
