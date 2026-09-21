@@ -1,0 +1,236 @@
+# @package _global_
+# DM10 (Damiao 10-DoF lower body) STANDING task — the L0 rung.
+#
+# What L0 is
+# ----------
+# Stand still under zero command, and recover from a shove. Why it is a separate
+# task rather than a tweak to dm10_joystick_flat: that task samples
+# `lin_vel_x: [0.3, 0.5]` with `rel_standing_envs: 0.0`, so the policy has NEVER
+# seen a zero command. Standing is not a refinement of walking here, it is a
+# capability that was skipped. See memory `legged-rl-task-ladder`.
+#
+# Inherits g1_motion_tracking (like dm10_motion_tracking) and changes:
+#   scene      -> scene_flat_measured.xml   (6.12 kg measured + <position>)
+#   reference  -> stand.npz only            (one clip, 190 frames @ 50 fps = 3.8 s)
+#   episode    -> 5 s                       (standing is static; long clips pad)
+#   + a push event                          (recovery is trained, not tracked)
+# Everything else (rewards, observations, terminations) is inherited unchanged.
+#
+# Why scene_flat_measured.xml and not the actuator scene
+# -----------------------------------------------------
+# The real robot runs Damiao MIT mode = position targets + firmware gains, which
+# is what a <position> servo models. `<dcmotor input="voltage">` is a DIFFERENT
+# plant (the policy would emit volts, not positions). dm10_measured.xml is the
+# only asset that is both mass-corrected and actuated the way the robot actually
+# runs — and it had no scene file until 2026-09-21.
+#
+# ⚠️ The reference clip teaches POSTURE. "Being shoved" does not exist in it, so
+# shove recovery has to come from the push event below, not from tracking. That is
+# the whole reason this task needs a push term at all.
+defaults:
+  - /task/g1_motion_tracking/mujoco
+  - _self_
+
+training:
+  task_name: DM10Stand
+  sim_backend: mujoco
+  play_steps: 300          # 5 s episode + margin
+  play_env_num: 1
+  render_spacing: 2.0
+  cam_distance: 1.6
+  cam_azimuth: 145.0
+  cam_elevation: -4.0
+  cam_lookat: [0.0, 0.0, 0.40]
+  cam_tracking: true
+
+algo:
+  num_envs: 2048
+  max_iterations: 2000
+  save_interval: 500
+  obs_groups:
+    actor: [actor]
+
+play_profile:
+  enabled: false
+  env: null
+
+env:
+  scene:
+    model_file: src/unilab/assets/robots/dm10/scene_flat_measured.xml
+    default_keyframe_name: home
+    entities:
+      robot:
+        root_body_name: base_link
+        joint_names: &dm10_joints
+          - leg_l1_joint
+          - leg_l2_joint
+          - leg_l3_joint
+          - leg_l4_joint
+          - leg_l5_joint
+          - leg_r1_joint
+          - leg_r2_joint
+          - leg_r3_joint
+          - leg_r4_joint
+          - leg_r5_joint
+        actuator_names:
+          - leg_l1_joint_motor
+          - leg_l2_joint_motor
+          - leg_l3_joint_motor
+          - leg_l4_joint_motor
+          - leg_l5_joint_motor
+          - leg_r1_joint_motor
+          - leg_r2_joint_motor
+          - leg_r3_joint_motor
+          - leg_r4_joint_motor
+          - leg_r5_joint_motor
+        # base_link MUST be first: MotionCommand uses body_names[0] as the root
+        # reference column when placing the robot on reset.
+        body_names: &tracked_bodies
+          - base_link
+          - loin_yaw_Link
+          - leg_l1_link
+          - leg_l2_link
+          - leg_l3_link
+          - leg_l4_link
+          - leg_l5_link
+          - leg_r1_link
+          - leg_r2_link
+          - leg_r3_link
+          - leg_r4_link
+          - leg_r5_link
+        geom_names: [floor]
+
+  sim_dt: 0.005
+  ctrl_dt: 0.02
+  max_episode_seconds: 5.0     # standing is static; 20 s would just pad resets
+
+  commands:
+    motion:
+      _target_: unilab.tasks.motion_tracking.common.manager_terms.MotionCommandCfg
+      entity_name: robot
+      resampling_time_range: [1.0e9, 1.0e9]
+      params:
+        # ONE clip. A1-_Stand_stageii is the only RPO motion that is actually
+        # static: 22 of 23 joints move < 5 deg, and the knee sits at 0.000 rad
+        # (straight leg) for the whole clip — which is now exactly the home pose,
+        # so reference and default agree by construction.
+        # Contrast stand_to_walk_back.npz, whose knee sweeps 46 deg: that is
+        # walking, and it is why "standing" was never learned.
+        motion_file:
+          - motions/dm10/stand.npz
+        anchor_body_name: base_link
+        body_names: *tracked_bodies
+        sampling_mode: start
+        sampling_start_ratio: 0.0
+        # NOTE: must stay false. With true, MotionCommand skips the wrap-around
+        # resample but still refreshes the reference buffer with the advanced
+        # (out-of-range) frame index, which raises IndexError at clip end.
+        # (hold_on_clip_end below is the supported way to get "stay on the last
+        # frame" — it pins the index into range instead of letting it run off.)
+        truncate_on_clip_end: false
+        # ⭐ L0's whole point: the reference plays out at frame 189 of a 250-step
+        # episode and then STAYS there, instead of restarting (which is what the
+        # default resample path did — invisible for this clip only because every
+        # frame of a static stand is nearly identical). That leaves 61 steps
+        # (~1.2 s) per episode where the actor still sees the frozen reference but
+        # the tracking rewards no longer carry it, which is the window
+        # stand_still_after_motion is gated on.
+        hold_on_clip_end: true
+        # Milder than dm10_motion_tracking: this clip is 3.8 s inside a 5 s
+        # episode, so the robot spends the tail free of the reference and the
+        # only thing keeping it there is the tracking reward. Big pose offsets
+        # would fight that.
+        pose_range:
+          x: [-0.02, 0.02]
+          y: [-0.02, 0.02]
+          z: [-0.01, 0.01]
+          roll: [-0.05, 0.05]
+          pitch: [-0.05, 0.05]
+          yaw: [-0.1, 0.1]
+        velocity_range:
+          x: [-0.1, 0.1]
+          y: [-0.1, 0.1]
+          z: [-0.1, 0.1]
+          roll: [-0.1, 0.1]
+          pitch: [-0.1, 0.1]
+          yaw: [-0.2, 0.2]
+        # ⚠️ The ONLY joint-angle randomisation anywhere in the dm10 tasks — and
+        # it matters here. The straight-leg home has the knee at exactly 0, i.e.
+        # the leg Jacobian is singular. Without this, every episode would start
+        # from the identical singular configuration.
+        joint_position_range: [-0.05, 0.05]
+        joint_default_position_range: [0.0, 0.0]
+
+  events:
+    push_robot:
+      func: unilab.envs.mdp.push_by_setting_velocity
+      mode: interval
+      # Referenced to env time, not a global clock: with 2048 envs a global-clock
+      # interval would fire across all of them simultaneously.
+      is_global_time: false
+      interval_range_s: [0.5, 2.5]
+      params:
+        velocity_range:
+          # ⚠️ Sized from a measurement, not a guess. With plain PD servo at the
+          # same gains (kp 30 / kv 3), BOTH the straight-leg and bent-knee poses
+          # recover from 0.5 m/s and fall at 1.0 m/s. So 0.5 is free and teaches
+          # nothing; 0.8 is just past that open-loop ceiling, and the graduated
+          # ladder runs up to the 1.5 lateral / 2.0 fore-aft L0 exit bar.
+          x: [-0.8, 0.8]
+          y: [-0.8, 0.8]
+          z: [-0.2, 0.2]
+          roll: [0.0, 0.0]
+          pitch: [0.0, 0.0]
+          yaw: [0.0, 0.0]
+
+  terminations:
+    time_out:
+      func: unilab.envs.mdp.time_out
+      time_out: true
+    anchor_pos:
+      func: unilab.tasks.motion_tracking.common.manager_terms.bad_anchor_pos_z_only
+      params: {command_name: motion, threshold: 0.25}
+    anchor_ori:
+      func: unilab.tasks.motion_tracking.common.manager_terms.bad_anchor_ori
+      params:
+        command_name: motion
+        threshold: 0.8
+        asset_cfg:
+          _target_: unilab.managers.SceneEntityCfg
+          name: robot
+    # dm10 has no arms: only the two foot links are tracked end-effectors.
+    ee_body_pos:
+      func: unilab.tasks.motion_tracking.common.manager_terms.bad_motion_body_pos_z_only
+      params:
+        command_name: motion
+        threshold: 0.25
+        body_names:
+          - leg_l5_link
+          - leg_r5_link
+  policy_observation_group: actor
+  critic_observation_group: critic
+
+# Merged on top of g1_motion_tracking's reward table (the 6 tracking terms plus
+# action_rate_l2 / joint_limit are inherited unchanged).
+reward:
+  # ⭐ The term that makes "hold the last frame" mean something. Without it, once
+  # hold_on_clip_end freezes the reference there is nothing asking the robot to
+  # stay put — the tracking rewards are exactly satisfied by a frozen reference,
+  # so the policy could drift freely and still score.
+  #
+  # Ported from BeyondMimic's getup task (weight -0.2, pos 1.0, vel 0.04). Those
+  # numbers came off a different robot and a different motion, so treat them as a
+  # starting point: verify by printing Episode_Reward/stand_still_after_motion,
+  # not by assuming the term is doing something. This repo has been bitten before
+  # by a gated term that was silently always-zero.
+  stand_still_after_motion:
+    func: unilab.tasks.motion_tracking.common.manager_terms.stand_still_after_motion
+    weight: -0.2
+    params:
+      command_name: motion
+      pos_weight: 1.0
+      vel_weight: 0.04
+      asset_cfg:
+        _target_: unilab.managers.SceneEntityCfg
+        name: robot
+        joint_names: [".*"]
